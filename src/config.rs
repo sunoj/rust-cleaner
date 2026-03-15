@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Directory names recognized as cleanable dev artifacts.
+pub const ARTIFACT_DIRS: &[&str] = &["target", "node_modules", ".next", "dist", "build"];
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct Config {
@@ -11,6 +14,8 @@ pub struct Config {
     pub max_age_days: u64,
     pub max_depth: usize,
     pub auto_clean_hours: u64,
+    /// Which artifact dir names to scan. Defaults to all known types.
+    pub artifact_types: Vec<String>,
 }
 
 impl Default for Config {
@@ -20,6 +25,7 @@ impl Default for Config {
             max_age_days: 7,
             max_depth: 5,
             auto_clean_hours: 0,
+            artifact_types: ARTIFACT_DIRS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
