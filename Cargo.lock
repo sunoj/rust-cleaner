@@ -61,6 +61,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "getattrlistbulk"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e65718dfbb192923baed0b86b0e5363103570fdc39d5a2f25c572aa75144b712"
+dependencies = [
+ "bitflags",
+ "libc",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -300,6 +310,7 @@ name = "rust-cleaner"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "getattrlistbulk",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

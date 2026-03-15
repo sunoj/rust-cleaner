@@ -10,7 +10,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor,
+    NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor,
     NSCompositingOperation, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
     NSImageSymbolConfiguration, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
@@ -18,10 +18,11 @@ use objc2_foundation::{
     ns_string, MainThreadMarker, NSArray, NSDictionary, NSObject, NSPoint, NSRect,
     NSSize, NSAttributedString, NSString, NSTimer,
 };
-use scanner::{human_size, scan, TargetDir};
+use scanner::{human_size, scan, ArtifactGroup, ArtifactKind, TargetDir};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 const INFO_LIMIT: usize = 15;
@@ -30,7 +31,10 @@ const SECONDS_PER_DAY: u64 = 86_400;
 const ICON_NORMAL: &str = "internaldrive";
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
+static SCANNING: AtomicBool = AtomicBool::new(false);
+static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
+static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 
 thread_local! {
     static APP_STATE: RefCell<Option<AppState>> = RefCell::new(None);
@@ -78,11 +82,11 @@ define_class!(
         #[unsafe(method(handleCleanAll:))]
         fn handle_clean_all(&self, _sender: &NSMenuItem) {
             let targets: Vec<_> = with_state_ret(|state| {
-                state.targets.iter().map(|t| (t.path.clone(), t.size_bytes, t.last_modified)).collect()
+                state.targets.iter().map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect()
             }).unwrap_or_default();
             start_clean(move || {
                 let tds: Vec<TargetDir> = targets.into_iter()
-                    .map(|(path, size_bytes, last_modified)| TargetDir { path, size_bytes, last_modified })
+                    .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
                     .collect();
                 let r = clean_all(&tds);
                 if r.removed_count > 0 {
@@ -95,14 +99,14 @@ define_class!(
         fn handle_clean_old(&self, _sender: &NSMenuItem) {
             let work = with_state_ret(|state| {
                 let targets: Vec<_> = state.targets.iter()
-                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified)).collect();
+                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect();
                 let max_age = Duration::from_secs(state.config.max_age_days.saturating_mul(SECONDS_PER_DAY));
                 (targets, max_age)
             });
             if let Some((targets, max_age)) = work {
                 start_clean(move || {
                     let tds: Vec<TargetDir> = targets.into_iter()
-                        .map(|(path, size_bytes, last_modified)| TargetDir { path, size_bytes, last_modified })
+                        .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
                         .collect();
                     let r = clean_old(&tds, max_age);
                     if r.removed_count > 0 {
@@ -112,13 +116,44 @@ define_class!(
             }
         }
 
+        #[unsafe(method(handleCleanGroup:))]
+        fn handle_clean_group(&self, sender: &NSMenuItem) {
+            let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
+            let targets: Vec<_> = with_state_ret(|state| {
+                state.targets.iter()
+                    .filter(|t| t.kind.group() == group)
+                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind))
+                    .collect()
+            }).unwrap_or_default();
+            let label = group.label();
+            start_clean(move || {
+                let tds: Vec<TargetDir> = targets.into_iter()
+                    .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
+                    .collect();
+                let r = clean_all(&tds);
+                if r.removed_count > 0 {
+                    println!("Clean {} freed {} from {} dirs", label, human_size(r.freed_bytes), r.removed_count);
+                }
+            });
+        }
+
+        #[unsafe(method(handleGroupInfo:))]
+        fn handle_group_info(&self, sender: &NSMenuItem) {
+            let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
+            let mtm = self.mtm();
+            let alert = NSAlert::new(mtm);
+            alert.setMessageText(&NSString::from_str(group.label()));
+            alert.setInformativeText(&NSString::from_str(group.description()));
+            alert.setAlertStyle(NSAlertStyle::Informational);
+            let app = NSApplication::sharedApplication(mtm);
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+            alert.runModal();
+        }
+
         #[unsafe(method(handleRescan:))]
         fn handle_rescan(&self, _sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            with_state(|state| {
-                state.targets = scan(&state.config);
-                refresh_menu(state, mtm);
-            });
+            start_scan(false);
         }
 
         #[unsafe(method(handleSetAutoInterval:))]
@@ -168,43 +203,54 @@ define_class!(
 
         #[unsafe(method(autoCleanTick:))]
         fn auto_clean_tick(&self, _sender: &NSTimer) {
-            let _mtm = self.mtm();
-            if CLEANING.load(Ordering::Relaxed) {
+            if CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed) {
                 return;
             }
-            let work = with_state_ret(|state| {
-                state.targets = scan(&state.config);
-                let targets: Vec<_> = state.targets.iter()
-                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified)).collect();
-                let max_age = Duration::from_secs(state.config.max_age_days.saturating_mul(SECONDS_PER_DAY));
-                (targets, max_age)
-            });
-            if let Some((targets, max_age)) = work {
-                start_clean(move || {
-                    let tds: Vec<TargetDir> = targets.into_iter()
-                        .map(|(path, size_bytes, last_modified)| TargetDir { path, size_bytes, last_modified })
-                        .collect();
-                    let r = clean_old(&tds, max_age);
-                    if r.removed_count > 0 {
-                        println!("Auto Clean freed {} from {} dirs", human_size(r.freed_bytes), r.removed_count);
-                    }
-                });
-            }
+            start_scan(true);
         }
 
         #[unsafe(method(shineTick:))]
         fn shine_tick(&self, _sender: &NSTimer) {
-            let mtm = self.mtm();
-            // Fire once — stop timer and refresh to final state
+            // Fire once — stop timer, then trigger background rescan
             SHINE_TIMER.with(|cell| {
                 if let Some(timer) = cell.borrow_mut().take() {
                     timer.invalidate();
                 }
             });
-            with_state(|state| {
-                state.targets = scan(&state.config);
-                refresh_menu(state, mtm);
-            });
+            start_scan(false);
+        }
+
+        #[unsafe(method(scanDone:))]
+        fn scan_done(&self, _sender: *mut AnyObject) {
+            let mtm = self.mtm();
+            SCANNING.store(false, Ordering::Relaxed);
+            let results = SCAN_RESULT.lock().unwrap().take();
+            if let Some(targets) = results {
+                with_state(|state| {
+                    state.targets = targets;
+                    refresh_menu(state, mtm);
+                });
+            }
+            // If auto-clean requested this scan, trigger clean now
+            if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
+                let work = with_state_ret(|state| {
+                    let targets: Vec<_> = state.targets.iter()
+                        .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect();
+                    let max_age = Duration::from_secs(state.config.max_age_days.saturating_mul(SECONDS_PER_DAY));
+                    (targets, max_age)
+                });
+                if let Some((targets, max_age)) = work {
+                    start_clean(move || {
+                        let tds: Vec<TargetDir> = targets.into_iter()
+                            .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
+                            .collect();
+                        let r = clean_old(&tds, max_age);
+                        if r.removed_count > 0 {
+                            println!("Auto Clean freed {} from {} dirs", human_size(r.freed_bytes), r.removed_count);
+                        }
+                    });
+                }
+            }
         }
 
         #[unsafe(method(cleanDone:))]
@@ -212,14 +258,13 @@ define_class!(
             let mtm = self.mtm();
             stop_anim();
             CLEANING.store(false, Ordering::Relaxed);
-            // Show ✨ on status bar (no icon), then shineTick restores everything after 1s
+            // Show ✨ on status bar, then shineTick triggers background rescan after 1s
             with_state(|state| {
                 if let Some(button) = state.status_item.button(mtm) {
                     button.setImage(None);
                     button.setTitle(&NSString::from_str("✨"));
                 }
             });
-            // Restore icon + menu after 1 second
             HANDLER.with(|cell| {
                 if let Some(handler) = cell.borrow().as_ref() {
                     let target: &AnyObject = unsafe {
@@ -251,6 +296,41 @@ impl MenuHandler {
         let this = Self::alloc(mtm).set_ivars(());
         unsafe { msg_send![super(this), init] }
     }
+}
+
+/// Dispatch scan to a background thread. Set `then_clean` to chain auto-clean after scan.
+fn start_scan(then_clean: bool) {
+    if SCANNING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if then_clean {
+        POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
+    }
+    let config = with_state_ret(|state| state.config.clone());
+    let Some(config) = config else {
+        SCANNING.store(false, Ordering::Relaxed);
+        return;
+    };
+    std::thread::spawn(move || {
+        let results = scan(&config);
+        *SCAN_RESULT.lock().unwrap() = Some(results);
+        unsafe {
+            dispatch_async_f(
+                std::ptr::addr_of!(_dispatch_main_q),
+                std::ptr::null_mut(),
+                scan_done_trampoline,
+            );
+        }
+    });
+}
+
+extern "C" fn scan_done_trampoline(_ctx: *mut c_void) {
+    HANDLER.with(|cell| {
+        if let Some(handler) = cell.borrow().as_ref() {
+            let obj: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
+            let _: () = unsafe { msg_send![obj, scanDone: std::ptr::null::<AnyObject>()] };
+        }
+    });
 }
 
 fn start_clean<F: FnOnce() + Send + 'static>(work: F) {
@@ -288,7 +368,6 @@ extern "C" fn clean_done_trampoline(_ctx: *mut c_void) {
 
 fn start_anim() {
     ANIM_FRAME.store(0, Ordering::Relaxed);
-    // Show 🧹 immediately so status bar updates before first timer tick
     let mtm = MainThreadMarker::new().unwrap();
     with_state(|state| {
         if let Some(button) = state.status_item.button(mtm) {
@@ -312,7 +391,6 @@ fn start_anim() {
         }
     });
 }
-
 
 fn stop_anim() {
     ANIM_TIMER.with(|cell| {
@@ -359,21 +437,21 @@ fn main() {
     let status_item = status_bar.statusItemWithLength(-1.0);
     let handler = MenuHandler::new(mtm);
     let config = Config::load();
-    let targets = scan(&config);
+    let auto_hours = config.auto_clean_hours;
 
     HANDLER.with(|cell| *cell.borrow_mut() = Some(handler));
     APP_STATE.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
             config,
-            targets,
+            targets: Vec::new(),
             status_item,
         })
     });
 
+    // Show icon immediately, scan in background
     with_state(|state| refresh_menu(state, mtm));
-    let auto_hours = APP_STATE.with(|cell| {
-        cell.borrow().as_ref().map(|s| s.config.auto_clean_hours).unwrap_or(0)
-    });
+    start_scan(false);
+
     if auto_hours > 0 {
         start_auto_clean(auto_hours);
     }
@@ -521,26 +599,70 @@ fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
             add_disabled(&menu, "No targets found", mtm);
         } else {
             let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1);
+            let mut shown = 0usize;
 
-            for (i, td) in state.targets.iter().enumerate().take(INFO_LIMIT) {
-                let bar_len = ((td.size_bytes as f64 / max_size as f64) * MAX_BAR as f64)
-                    .ceil().max(1.0) as usize;
-                let title = format!("{}  —  {}  {}", project_name(td), human_size(td.size_bytes), "█".repeat(bar_len));
+            for &group in ArtifactGroup::ALL {
+                let items: Vec<(usize, &TargetDir)> = state.targets.iter()
+                    .enumerate()
+                    .filter(|(_, td)| td.kind.group() == group)
+                    .collect();
+                if items.is_empty() {
+                    continue;
+                }
 
-                let item = unsafe {
+                let group_size: u64 = items.iter().map(|(_, td)| td.size_bytes).sum();
+                add_disabled(&menu, &format!("{} — {}", group.label(), human_size(group_size)), mtm);
+
+                let info_item = unsafe {
                     NSMenuItem::initWithTitle_action_keyEquivalent(
                         NSMenuItem::alloc(mtm),
-                        &NSString::from_str(&title),
-                        Some(sel!(handleCleanProject:)),
+                        &NSString::from_str("  \u{24d8} Scan rules"),
+                        Some(sel!(handleGroupInfo:)),
                         ns_string!(""),
                     )
                 };
-                item.setTag(i as isize);
-                unsafe { item.setTarget(Some(target)) };
-                menu.addItem(&item);
-            }
-            if state.targets.len() > INFO_LIMIT {
-                add_disabled(&menu, &format!("... and {} more", state.targets.len() - INFO_LIMIT), mtm);
+                info_item.setTag(group.tag());
+                unsafe { info_item.setTarget(Some(target)) };
+                menu.addItem(&info_item);
+
+                let budget = INFO_LIMIT.saturating_sub(shown);
+                let show_count = items.len().min(budget);
+                for &(i, td) in items.iter().take(show_count) {
+                    let bar_len = ((td.size_bytes as f64 / max_size as f64) * MAX_BAR as f64)
+                        .ceil().max(1.0) as usize;
+                    let title = format!("  {}  [{}]  —  {}  {}", project_name(td), td.kind.label(), human_size(td.size_bytes), "█".repeat(bar_len));
+
+                    let item = unsafe {
+                        NSMenuItem::initWithTitle_action_keyEquivalent(
+                            NSMenuItem::alloc(mtm),
+                            &NSString::from_str(&title),
+                            Some(sel!(handleCleanProject:)),
+                            ns_string!(""),
+                        )
+                    };
+                    item.setTag(i as isize);
+                    unsafe { item.setTarget(Some(target)) };
+                    menu.addItem(&item);
+                    shown += 1;
+                }
+                if items.len() > show_count {
+                    add_disabled(&menu, &format!("  ... {} more", items.len() - show_count), mtm);
+                }
+
+                let clean_label = format!("  Clean {} ({})", group.label(), human_size(group_size));
+                let clean_item = unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        NSMenuItem::alloc(mtm),
+                        &NSString::from_str(&clean_label),
+                        Some(sel!(handleCleanGroup:)),
+                        ns_string!(""),
+                    )
+                };
+                clean_item.setTag(group.tag());
+                unsafe { clean_item.setTarget(Some(target)) };
+                menu.addItem(&clean_item);
+
+                menu.addItem(&NSMenuItem::separatorItem(mtm));
             }
         }
 
@@ -649,7 +771,14 @@ fn add_action(menu: &NSMenu, text: &str, action: Sel, target: &AnyObject, mtm: M
 }
 
 fn project_name(td: &TargetDir) -> String {
-    td.path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+    let name = match td.kind {
+        ArtifactKind::CcTarget => {
+            let dir_name = td.path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+            return dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string();
+        }
+        _ => td.path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("unknown"),
+    };
+    name.to_string()
 }
 
 fn with_state<F: FnOnce(&mut AppState)>(f: F) {

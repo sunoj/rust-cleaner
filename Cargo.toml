@@ -1,6 +1,6 @@
 [package]
 name = "rust-cleaner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A native macOS menu bar utility that finds and cleans Rust compilation artifacts (target/ directories)"
 license = "MIT"
@@ -13,8 +13,9 @@ readme = "README.md"
 [dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSObject", "NSString", "NSThread", "NSTimer", "NSDate", "NSObjCRuntime", "NSArray", "NSAttributedString", "NSDictionary"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSControl", "NSResponder", "NSImage", "NSRunningApplication", "NSColor", "NSBezierPath", "NSGraphics", "NSAttributedString", "NSFont"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSControl", "NSResponder", "NSImage", "NSRunningApplication", "NSColor", "NSBezierPath", "NSGraphics", "NSAttributedString", "NSFont", "NSAlert", "NSPanel", "NSWindow"] }
 walkdir = "2"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
+getattrlistbulk = "0.1.0"
