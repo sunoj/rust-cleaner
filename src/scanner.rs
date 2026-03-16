@@ -5,7 +5,7 @@ use crate::config::Config;
 use getattrlistbulk::{read_dir_with_buffer, ObjectType, RequestedAttributes};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 pub struct TargetDir {
     pub path: PathBuf,
@@ -124,7 +124,11 @@ pub fn scan(config: &Config) -> Vec<TargetDir> {
             continue;
         }
         let walker = WalkDir::new(dir).max_depth(config.max_depth);
-        for entry in walker.into_iter().filter_map(Result::ok) {
+        for entry in walker
+            .into_iter()
+            .filter_entry(|e| !should_skip(e, &config.artifact_types))
+            .filter_map(Result::ok)
+        {
             if entry.depth() == 0 || !entry.file_type().is_dir() {
                 continue;
             }
@@ -173,6 +177,14 @@ pub fn scan(config: &Config) -> Vec<TargetDir> {
 
     found.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
     found
+}
+
+fn should_skip(entry: &DirEntry, artifact_types: &[String]) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return false;
+    }
+    let name = entry.file_name().to_string_lossy();
+    name.starts_with('.') && !artifact_types.iter().any(|t| t == name.as_ref())
 }
 
 /// Validate that a directory is actually a dev artifact, not a false positive.
