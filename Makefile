@@ -14,7 +14,7 @@ build:
 bundle: build
 	rm -rf "$(BUNDLE)"
 	mkdir -p "$(BUNDLE)/Contents/MacOS" "$(BUNDLE)/Contents/Resources"
-	cp target/release/$(BINARY) "$(BUNDLE)/Contents/MacOS/"
+	cp "$${CARGO_TARGET_DIR:-target}/release/$(BINARY)" "$(BUNDLE)/Contents/MacOS/"
 	cp Info.plist "$(BUNDLE)/Contents/"
 	cp AppIcon.icns "$(BUNDLE)/Contents/Resources/"
 	@echo "Built $(BUNDLE)"

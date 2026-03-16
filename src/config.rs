@@ -1,7 +1,6 @@
 // Config definitions for WD-40.
 // Handles defaults and TOML parsing.
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -32,52 +31,13 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn is_first_run() -> bool {
-        Self::config_path().map_or(true, |p| !p.exists())
-    }
-
-    pub fn broad_scan_dirs() -> Vec<PathBuf> {
-        let Some(home) = dirs::home_dir() else {
-            return vec![];
-        };
-        let candidates = [
-            "Develop",
-            "Developer",
-            "Projects",
-            "Documents",
-            "repos",
-            "code",
-            "src",
-            "workspace",
-            "Code",
-            "Work",
-        ];
-        candidates
-            .iter()
-            .map(|name| home.join(name))
-            .filter(|p| p.is_dir())
-            .collect()
-    }
-
-    pub fn discover_scan_dirs(targets: &[crate::scanner::TargetDir]) -> Vec<PathBuf> {
-        let mut dirs = BTreeSet::new();
-        for target in targets {
-            if let Some(project_dir) = target.path.parent() {
-                if let Some(dev_dir) = project_dir.parent() {
-                    dirs.insert(dev_dir.to_path_buf());
-                }
-            }
-        }
-        dirs.into_iter().collect()
-    }
-
     pub fn load() -> Self {
         if let Some(path) = Self::config_path() {
             if let Ok(contents) = fs::read_to_string(&path) {
                 if let Ok(parsed) = toml::from_str::<Config>(&contents) {
                     return parsed;
                 } else {
-                    eprintln!("rust-cleaner: failed to parse {}", path.display());
+                    eprintln!("wd-40: failed to parse {}", path.display());
                 }
             }
         }
