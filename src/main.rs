@@ -6,6 +6,7 @@ mod menu;
 use menu::refresh_menu;
 use rust_cleaner::cleaner::{clean_all, clean_old};
 use rust_cleaner::config::Config;
+use rust_cleaner::disk::{disk_space, sum_bytes};
 use rust_cleaner::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -47,7 +48,22 @@ struct AppState {
 
 impl AppState {
     fn total_size(&self) -> u64 {
-        self.targets.iter().map(|t| t.size_bytes).sum()
+        sum_bytes(self.targets.iter().map(|t| t.size_bytes))
+    }
+
+    fn remaining_disk_space(&self) -> Option<u64> {
+        let path = self
+            .targets
+            .first()
+            .map(|target| target.path.as_path())
+            .or_else(|| {
+                self.config
+                    .scan_dirs
+                    .iter()
+                    .find(|path| path.exists())
+                    .map(|path| path.as_path())
+            })?;
+        disk_space(path).map(|stats| stats.free_bytes)
     }
 }
 

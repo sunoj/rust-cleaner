@@ -2,6 +2,7 @@
 // Usage: wd40 [scan|clean|clean-old|help] [options]
 use rust_cleaner::cleaner::{clean_all, clean_old};
 use rust_cleaner::config::Config;
+use rust_cleaner::disk::sum_bytes;
 use rust_cleaner::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
 use std::time::Duration;
 
@@ -52,7 +53,7 @@ fn cmd_clean(args: &[String]) {
     }
 
     print_table(&targets);
-    let total: u64 = targets.iter().map(|t| t.size_bytes).sum();
+    let total = sum_bytes(targets.iter().map(|t| t.size_bytes));
 
     if dry_run {
         println!("\n[dry-run] Would clean {} from {} dirs", human_size(total), targets.len());
@@ -102,7 +103,7 @@ fn cmd_clean_old(args: &[String]) {
         );
     }
 
-    let total: u64 = old.iter().map(|t| t.size_bytes).sum();
+    let total = sum_bytes(old.iter().map(|t| t.size_bytes));
 
     if dry_run {
         println!("\n[dry-run] Would clean {} from {} dirs", human_size(total), old.len());
@@ -142,7 +143,12 @@ fn parse_group_flag(args: &[String]) -> Option<ArtifactGroup> {
 fn parse_days_flag(args: &[String]) -> Option<u64> {
     for (i, arg) in args.iter().enumerate() {
         if (arg == "--days" || arg == "-d") && i + 1 < args.len() {
-            return args[i + 1].parse().ok();
+            let days: u64 = args[i + 1].parse().ok()?;
+            if days == 0 {
+                eprintln!("Error: --days must be >= 1");
+                std::process::exit(1);
+            }
+            return Some(days);
         }
     }
     None
@@ -162,8 +168,8 @@ fn print_table(targets: &[TargetDir]) {
         if items.is_empty() {
             continue;
         }
-        let group_size: u64 = items.iter().map(|t| t.size_bytes).sum();
-        total += group_size;
+        let group_size = sum_bytes(items.iter().map(|t| t.size_bytes));
+        total = total.saturating_add(group_size);
         println!("\n{} — {}", group.label(), human_size(group_size));
         for t in &items {
             let age_days = now

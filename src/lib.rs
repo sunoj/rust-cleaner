@@ -2,4 +2,5 @@
 // Used by both the macOS menu bar app and the CLI.
 pub mod cleaner;
 pub mod config;
+pub mod disk;
 pub mod scanner;

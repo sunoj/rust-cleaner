@@ -24,10 +24,15 @@ impl Default for CleanResult {
 pub fn clean_all(targets: &[TargetDir]) -> CleanResult {
     let mut result = CleanResult::default();
     for target in targets {
+        // Safety: verify path is still a real directory, not a symlink replacement
+        if target.path.is_symlink() || !target.path.is_dir() {
+            result.errors.push((target.path.clone(), "path changed since scan (symlink or missing)".into()));
+            continue;
+        }
         match fs::remove_dir_all(&target.path) {
             Ok(()) => {
                 result.removed_count += 1;
-                result.freed_bytes += target.size_bytes;
+                result.freed_bytes = result.freed_bytes.saturating_add(target.size_bytes);
             }
             Err(err) => result
                 .errors
@@ -45,10 +50,14 @@ pub fn clean_old(targets: &[TargetDir], max_age: Duration) -> CleanResult {
             .duration_since(target.last_modified)
             .unwrap_or(Duration::ZERO);
         if age >= max_age {
+            if target.path.is_symlink() || !target.path.is_dir() {
+                result.errors.push((target.path.clone(), "path changed since scan (symlink or missing)".into()));
+                continue;
+            }
             match fs::remove_dir_all(&target.path) {
                 Ok(()) => {
                     result.removed_count += 1;
-                    result.freed_bytes += target.size_bytes;
+                    result.freed_bytes = result.freed_bytes.saturating_add(target.size_bytes);
                 }
                 Err(err) => result
                     .errors

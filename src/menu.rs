@@ -4,6 +4,7 @@
 
 use crate::icon::{rust_text_color, rusty_icon};
 use crate::{AppState, HANDLER};
+use rust_cleaner::disk::sum_bytes;
 use rust_cleaner::scanner::{human_size, ArtifactGroup, ArtifactKind, TargetDir};
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{sel, MainThreadOnly};
@@ -76,7 +77,7 @@ pub fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
                     continue;
                 }
 
-                let group_size: u64 = items.iter().map(|(_, td)| td.size_bytes).sum();
+                let group_size = sum_bytes(items.iter().map(|(_, td)| td.size_bytes));
                 let header = if sizing {
                     format!("{} — {} projects", group.label(), items.len())
                 } else {
@@ -152,6 +153,9 @@ pub fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
             add_disabled(&menu, &format!("{} projects — computing sizes...", state.targets.len()), mtm);
         } else {
             add_disabled(&menu, &format!("Total: {} in {} projects", human_size(total), state.targets.len()), mtm);
+            if let Some(free_bytes) = state.remaining_disk_space() {
+                add_disabled(&menu, &format!("Remaining Disk Space: {}", human_size(free_bytes)), mtm);
+            }
         }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
