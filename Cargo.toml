@@ -1,6 +1,6 @@
 [package]
 name = "rust-cleaner"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Find and clean dev build artifacts (target/, node_modules/, .next/, dist/, build/) on macOS"
 license = "MIT"

@@ -240,12 +240,27 @@ fn add_action(menu: &NSMenu, text: &str, action: Sel, target: &AnyObject, mtm: M
 }
 
 pub fn project_name(td: &TargetDir) -> String {
-    let name = match td.kind {
+    match td.kind {
         ArtifactKind::CcTarget => {
             let dir_name = td.path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
-            return dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string();
+            dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string()
         }
-        _ => td.path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("unknown"),
-    };
-    name.to_string()
+        _ => {
+            // Under ~/.cargo-target/, the target IS the project (and optional session) dir,
+            // so show the path relative to .cargo-target (e.g. "smart-router/feat-xxx").
+            if let Some(home) = dirs::home_dir() {
+                let shared_root = home.join(".cargo-target");
+                if let Ok(rel) = td.path.strip_prefix(&shared_root) {
+                    return rel.to_string_lossy().into_owned();
+                }
+            }
+            // Standard target/node_modules/.next — show the containing project dir name.
+            td.path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        }
+    }
 }

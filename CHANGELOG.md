@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.2] — 2026-04-18
+
+### Fixed
+- **Project name in menu bar**: targets under `~/.cargo-target/` now show their path relative to the shared root (e.g. `smart-router`, `smart-router/feat-xxx`) instead of `.cargo-target` or an indistinguishable `smart-router` repeated for every session
+
 ## [0.4.1] — 2026-04-18
 
 ### Changed
