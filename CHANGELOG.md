@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1] — 2026-04-18
+
+### Changed
+- **Per-session visibility under `~/.cargo-target/`**: list each `<project>/<session>/` session subdir as its own row so users can see the breakdown (previously only the project root was shown)
+- **Nested size adjustment**: when a target is an ancestor of another target, the ancestor's reported size now subtracts the descendant's size — no double-counting, total matches actual disk usage
+
 ## [0.4.0] — 2026-04-18
 
 ### Added

@@ -195,7 +195,28 @@ pub fn scan_sizes(targets: &mut Vec<TargetDir>) {
     for (td, size) in targets.iter_mut().zip(sizes) {
         td.size_bytes = size;
     }
+    subtract_nested_sizes(targets);
     targets.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+}
+
+/// When one target is an ancestor of another (e.g. ~/.cargo-target/smart-router
+/// and ~/.cargo-target/smart-router/session-a), subtract the descendant's size
+/// from the ancestor so the total across all targets reflects disk usage.
+fn subtract_nested_sizes(targets: &mut [TargetDir]) {
+    let entries: Vec<(PathBuf, u64)> = targets
+        .iter()
+        .map(|t| (t.path.clone(), t.size_bytes))
+        .collect();
+    for target in targets.iter_mut() {
+        for (path, size) in &entries {
+            if path == &target.path {
+                continue;
+            }
+            if path.starts_with(&target.path) {
+                target.size_bytes = target.size_bytes.saturating_sub(*size);
+            }
+        }
+    }
 }
 
 /// Directories that never contain dev artifacts — skip to avoid slow traversal.
@@ -300,9 +321,7 @@ fn collect_shared_cargo_target(found: &mut Vec<TargetDir>) {
         if path.is_symlink() || !path.is_dir() {
             continue;
         }
-        if try_push_cargo_target(found, &path) {
-            continue;
-        }
+        try_push_cargo_target(found, &path);
         let Ok(subs) = std::fs::read_dir(&path) else { continue };
         for sub in subs.filter_map(Result::ok) {
             let sub_path = sub.path();
