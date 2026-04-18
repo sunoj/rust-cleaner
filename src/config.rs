@@ -37,7 +37,7 @@ impl Config {
                 if let Ok(parsed) = toml::from_str::<Config>(&contents) {
                     return parsed;
                 } else {
-                    eprintln!("rust-cleaner: failed to parse {}", path.display());
+                    eprintln!("wd-40: failed to parse {}", path.display());
                 }
             }
         }

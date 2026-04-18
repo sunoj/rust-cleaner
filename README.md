@@ -1,92 +1,98 @@
-# Rust Cleaner
+# WD-40
 
-> A native macOS menu bar utility to keep your development environment lean by cleaning build artifacts.
+> Dev artifact cleaner for macOS — menu bar app + CLI.
 
-<!-- ![Rust Cleaner Screenshot](screenshot.png) -->
+WD-40 finds and cleans build artifact directories (`target/`, `node_modules/`, `.next/`, `dist/`, `build/`, and `/tmp/cc-target-*`) to reclaim disk space.
 
-Rust Cleaner is a lightweight, native macOS utility for developers. It finds and cleans build artifact directories (`target/`, `node_modules/`, `.next/`, `dist/`, `build/`, and temporary Cargo build dirs) to reclaim disk space.
+## Two Ways to Use
 
-## Features
+### Menu Bar App (`rust-cleaner`)
 
-- **Native macOS Experience**: Built with pure Rust and native AppKit bindings (`objc2`) — no Electron, no web views, zero bloat.
-- **Visual Status**: A status bar icon that gets "rustier" as your accumulated build artifacts grow.
-- **Grouped by Type**: Scan results are organized into groups for easy browsing:
-  - **Rust** — `target/` directories and `/tmp/cc-target-*` temporary build dirs
-  - **Node Modules** — `node_modules/` dependency directories
-  - **Build Output** — `.next/`, `dist/`, `build/` framework output directories
-- **Info Panel**: Each group has an info button showing the exact scan rules and detection heuristics.
-- **Detailed Insights**: View per-project disk usage with integrated bar charts in the menu dropdown.
-- **Flexible Cleaning**:
-  - One-click clean for individual projects.
-  - **Clean by Group**: Remove all artifacts of a specific type (e.g., all Rust targets).
-  - **Clean All**: Wipe all detected artifact directories.
-  - **Clean Old**: Remove artifacts older than a configurable number of days.
-- **Automation**: Configurable auto-clean intervals (1h, 6h, 12h, 24h) and age thresholds (3, 7, 14, 30 days).
-- **Interactive Feedback**: Smooth animations during cleaning (🧹) and a celebratory finish (✨).
+A native macOS status bar utility with zero-config scanning.
+
+- **Visual Status**: Icon gets "rustier" as build artifacts grow
+- **Grouped Results**: Rust, Node Modules, Build Output — with per-group totals
+- **One-Click Clean**: Individual projects, by group, all, or old only
+- **Auto Scan**: Refreshes every 5 minutes
+- **Auto Clean**: Configurable interval (1h/6h/12h/24h) + age threshold
+- **Two-Phase Scan**: Instant discovery, background size computation
+
+### CLI (`wd40`)
+
+Fast terminal interface for scripting and quick checks.
+
+```
+$ wd40
+Scanning... found 17 targets
+
+Rust — 2.7G
+    764.3M    0d  [cc-target]  /tmp/cc-target-ai-dispatch-270
+    338.0M    0d  [cc-target]  /tmp/cc-target-dev-cleaner-269
+
+Node Modules — 1.6G
+    351.0M    0d  [node_modules]  ~/Develop/ai/hiboss/node_modules
+    308.9M    1d  [node_modules]  ~/Develop/ai/website-store/node_modules
+
+Total: 4.3G in 17 targets
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `wd40` / `wd40 scan` | Scan and display all artifacts |
+| `wd40 clean` | Remove all artifact directories |
+| `wd40 clean-old` | Remove artifacts older than N days |
+| `wd40 scan -g rust` | Filter by group: `rust`, `node`, `build` |
+| `wd40 clean-old -d 14` | Custom age threshold |
+| `wd40 clean --dry-run` | Preview without deleting |
 
 ## Installation
 
 ### From Source
 
-Ensure you have the Rust toolchain installed.
+```bash
+# Build both binaries
+make build
 
-1. **Build the binary**:
-   ```bash
-   make build
-   ```
+# Install menu bar app to /Applications
+make install
 
-2. **Create the .app bundle**:
-   ```bash
-   make bundle
-   ```
+# Install CLI to PATH
+cp "$CARGO_TARGET_DIR/release/wd40" ~/.cargo/bin/
 
-3. **Install to /Applications**:
-   ```bash
-   make install
-   ```
-
-4. **Enable Auto-start on Login**:
-   ```bash
-   make autostart
-   ```
+# Optional: auto-start menu bar app on login
+make autostart
+```
 
 ## Configuration
 
-Rust Cleaner stores its configuration in `~/.config/wd-40/config.toml`.
+`~/.config/wd-40/config.toml` — shared by both app and CLI.
 
 ```toml
-# Directories to scan for projects (default: ["~/Develop"])
-scan_dirs = ["/Users/username/Develop", "/Users/username/Projects"]
-
-# Which artifact directory names to scan (default: all known types)
+scan_dirs = ["/Users/username/Develop"]
 artifact_types = ["target", "node_modules", ".next", "dist", "build"]
-
-# Threshold for "old" artifacts in days (default: 7)
-max_age_days = 14
-
-# Maximum directory depth for scanning (default: 5)
-max_depth = 4
-
-# Auto-clean interval in hours. Set to 0 to disable (default: 0)
-auto_clean_hours = 12
+max_age_days = 7
+max_depth = 5
+auto_clean_hours = 6   # 0 to disable
 ```
 
-## How it Works
+## Detection Rules
 
-Rust Cleaner walks your configured `scan_dirs` looking for known artifact directories. Each type has its own detection heuristic to avoid false positives:
-
-| Directory | Detection Rule |
-|-----------|---------------|
-| `target/` | Contains `debug/` or `release/` subdirectory |
+| Directory | Heuristic |
+|-----------|-----------|
+| `target/` | Contains `debug/` or `release/` |
 | `node_modules/` | Contains `.package-lock.json` or `.yarn-integrity` |
-| `.next/` | Contains `cache/` or `static/` subdirectory |
+| `.next/` | Contains `cache/` or `static/` |
 | `dist/`, `build/` | Parent has `package.json`, `Cargo.toml`, `build.gradle`, or `platformio.ini` |
-| `/tmp/cc-target-*` | Temporary Cargo build dirs (auto-detected) |
+| `/tmp/cc-target-*` | Auto-detected temporary Cargo build dirs |
 
-Results are grouped by type (Rust, Node Modules, Build Output) with per-group size totals and one-click group cleaning.
+## Performance
 
-The menu bar icon uses a color-tinted SF Symbol that progressively gets "rustier" with spots as total disk usage grows — a visual nudge to clean up.
+- **Discovery**: Parallel directory walk with smart skip rules (hidden dirs, system dirs, symlinks)
+- **Sizing**: macOS `getattrlistbulk` API — ~1,600x fewer syscalls than `stat` per file, with automatic fallback to `walkdir` on parse errors
+- **Native**: Pure Rust + AppKit via `objc2` — no Electron, no web views
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)

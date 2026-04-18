@@ -1,14 +1,22 @@
 [package]
 name = "rust-cleaner"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
-description = "A native macOS menu bar utility that finds and cleans Rust compilation artifacts (target/ directories)"
+description = "Find and clean dev build artifacts (target/, node_modules/, .next/, dist/, build/) on macOS"
 license = "MIT"
 repository = "https://github.com/sunoj/rust-cleaner"
 homepage = "https://rust-cleaner.agent-tools.org"
 keywords = ["macos", "rust", "clean", "target", "menubar"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
+
+[[bin]]
+name = "rust-cleaner"
+path = "src/main.rs"
+
+[[bin]]
+name = "wd40"
+path = "src/bin/wd40.rs"
 
 [dependencies]
 objc2 = "0.6"
@@ -19,3 +27,4 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
 getattrlistbulk = "0.1.0"
+libc = "0.2"
