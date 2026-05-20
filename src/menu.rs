@@ -241,17 +241,28 @@ fn add_action(menu: &NSMenu, text: &str, action: Sel, target: &AnyObject, mtm: M
 
 pub fn project_name(td: &TargetDir) -> String {
     match td.kind {
-        ArtifactKind::CcTarget => {
+        ArtifactKind::TmpTarget => {
             let dir_name = td.path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+            // Strip the cc-target- prefix when present; otherwise show as-is so
+            // names like "smart-router-target" stay recognizable.
             dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string()
         }
         _ => {
-            // Under ~/.cargo-target/, the target IS the project (and optional session) dir,
-            // so show the path relative to .cargo-target (e.g. "smart-router/feat-xxx").
             if let Some(home) = dirs::home_dir() {
+                // Under ~/.cargo-target/<project>[/<session>]/, show path relative to the root.
                 let shared_root = home.join(".cargo-target");
                 if let Ok(rel) = td.path.strip_prefix(&shared_root) {
                     return rel.to_string_lossy().into_owned();
+                }
+                // Under ~/.aid/worktrees/<repo>/<branch>/target, show "<repo>/<branch>".
+                let aid_root = home.join(".aid").join("worktrees");
+                if let Ok(rel) = td.path.strip_prefix(&aid_root) {
+                    if let Some(parent) = rel.parent() {
+                        let s = parent.to_string_lossy();
+                        if !s.is_empty() {
+                            return s.into_owned();
+                        }
+                    }
                 }
             }
             // Standard target/node_modules/.next — show the containing project dir name.
