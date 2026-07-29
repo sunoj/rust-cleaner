@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use wd40::cleaner::{clean_all, clean_old};
+use wd40::disk::disk_space;
 use wd40::scanner::{human_size, scan_discover, scan_sizes, TargetDir};
 
 /// How often the app rescans on its own, in seconds.
@@ -143,14 +144,29 @@ fn start_clean<F: FnOnce() + Send + 'static>(work: F) {
         return;
     }
     start_anim();
+    // Summed target sizes overstate what a delete returns whenever APFS clones
+    // share blocks between targets, so measure the volume instead of trusting
+    // the arithmetic. See docs/apfs-clone-overcount.md.
+    let reference = with_state_ret(|state| state.reference_path()).flatten();
+    let before = reference.as_deref().and_then(disk_space).map(|d| d.free_bytes);
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         work();
         if let Some(remaining) = MIN_CLEAN_ANIMATION.checked_sub(started.elapsed()) {
             std::thread::sleep(remaining);
         }
+        report_reclaimed(before, reference.as_deref());
         dispatch_to_main(clean_done_trampoline);
     });
+}
+
+/// Print what the volume actually gave back, which is the only figure that
+/// survives clone sharing.
+fn report_reclaimed(before: Option<u64>, reference: Option<&std::path::Path>) {
+    let (Some(before), Some(reference)) = (before, reference) else { return };
+    let Some(after) = disk_space(reference).map(|d| d.free_bytes) else { return };
+    let reclaimed = after.saturating_sub(before);
+    println!("Reclaimed {} of disk space", human_size(reclaimed));
 }
 
 /// Clean finished: show the sparkle, then rescan a second later.

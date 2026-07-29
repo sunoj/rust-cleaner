@@ -79,3 +79,15 @@ the only one that makes the displayed number meaningful.
 `CHANGELOG.md` 0.4.1 already added a nested-size adjustment so an ancestor
 target subtracts a descendant's size. That handles containment, which is a
 different problem from block sharing between siblings, and does not help here.
+
+## Caveat on the measured figure
+
+`Reclaimed` is a free-space delta, so concurrent writes by other processes are
+counted against it. A self-test that deleted a 300M target on a busy machine
+reported `Reclaimed 215.6M` because other builds consumed ~85M during the same
+seconds. The delta is still the honest number — it is what the volume actually
+gained — but it is not an exact attribution to the delete, and on an idle
+machine it will match the summed size closely.
+
+Both lines are printed deliberately: the sum says what was removed, the delta
+says what the disk got back, and their disagreement is the information.
