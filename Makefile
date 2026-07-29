@@ -4,7 +4,7 @@ BUNDLE := dist/$(APP_NAME).app
 INSTALL_DIR := /Applications
 CARGO_OUT := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)/release
 
-.PHONY: build test bundle install uninstall cli release clean
+.PHONY: build test bundle migrate-legacy install uninstall cli release clean
 
 build:
 	cargo build --release
@@ -16,7 +16,15 @@ test:
 bundle:
 	./scripts/bundle.sh
 
-install: bundle
+# One-shot cleanup of the pre-0.5.0 name. Without it an upgrading user keeps
+# the old bundle and its login job, and two menu bar apps start at login.
+# Delete this target and its use once no 0.4.x install is left in the wild.
+migrate-legacy:
+	-launchctl bootout gui/$$(id -u)/com.wd40.rust-cleaner 2>/dev/null
+	rm -f "$(HOME)/Library/LaunchAgents/com.wd40.rust-cleaner.plist"
+	rm -rf "$(INSTALL_DIR)/Rust Cleaner.app"
+
+install: bundle migrate-legacy
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	cp -R "$(BUNDLE)" "$(INSTALL_DIR)/"
 	@echo "Installed $(INSTALL_DIR)/$(APP_NAME).app — enable Launch at Login from the Settings submenu"

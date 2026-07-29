@@ -3,7 +3,7 @@
 // Deps: objc2, objc2_app_kit, objc2_foundation, crate::{icon, settings, style}.
 
 use crate::icon::{rust_text_color, rusty_icon};
-use crate::settings::build_settings_menu;
+use crate::rules_menu::build_rules_menu;
 use crate::style::{caption_font, menu_font, symbol_image, tinted, truncate, Row};
 use crate::{AppState, HANDLER};
 use objc2::rc::Retained;
@@ -73,9 +73,11 @@ fn build_menu(menu: &NSMenu, state: &AppState, target: &AnyObject, mtm: MainThre
     rescan.setKeyEquivalent(ns_string!("r"));
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    let settings = new_item(ns_string!("Settings"), None, mtm);
-    settings.setSubmenu(Some(&build_settings_menu(state, target, mtm)));
-    menu.addItem(&settings);
+    let settings = add_action(menu, "Settings\u{2026}", sel!(openSettings:), target, mtm);
+    settings.setKeyEquivalent(ns_string!(","));
+    let rules = new_item(ns_string!("Scan Rules"), None, mtm);
+    rules.setSubmenu(Some(&build_rules_menu(target, mtm)));
+    menu.addItem(&rules);
     add_updates_item(menu, state, mtm);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
