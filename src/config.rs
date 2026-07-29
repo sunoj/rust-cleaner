@@ -18,6 +18,20 @@ pub struct Config {
     pub artifact_types: Vec<String>,
 }
 
+/// Replace the known artifact types with `selected`, keeping any custom entry
+/// the user added by hand. The window can only represent `ARTIFACT_DIRS`, so a
+/// blind rewrite would silently delete anything outside that list.
+pub fn merge_artifact_types(existing: &[String], selected: &[String]) -> Vec<String> {
+    let mut merged: Vec<String> = selected.to_vec();
+    merged.extend(
+        existing
+            .iter()
+            .filter(|name| !ARTIFACT_DIRS.iter().any(|known| known == &name.as_str()))
+            .cloned(),
+    );
+    merged
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -65,4 +79,31 @@ fn default_scan_dirs() -> Vec<PathBuf> {
         .map(|home| home.join("Develop"))
         .map(|path| vec![path])
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_artifact_types;
+
+    fn owned(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn merge_keeps_custom_entries_the_window_cannot_show() {
+        let merged = merge_artifact_types(&owned(&["target", "vendor"]), &owned(&["target", "dist"]));
+        assert_eq!(merged, owned(&["target", "dist", "vendor"]));
+    }
+
+    #[test]
+    fn merge_drops_known_types_that_were_unchecked() {
+        let merged = merge_artifact_types(&owned(&["target", "dist"]), &owned(&["target"]));
+        assert_eq!(merged, owned(&["target"]));
+    }
+
+    #[test]
+    fn merge_handles_an_empty_selection_without_losing_custom_entries() {
+        let merged = merge_artifact_types(&owned(&["dist", "vendor"]), &[]);
+        assert_eq!(merged, owned(&["vendor"]));
+    }
 }
