@@ -3,8 +3,8 @@
 // Deps: objc2, objc2_app_kit, objc2_foundation, crate::{autostart, style}.
 
 use crate::controls::{
-    add_button, add_checkbox_at, add_label, add_popup, checkbox_is_on, label_field, select_tag,
-    selected_tag, set_checkbox,
+    add_button, add_checkbox_at, add_custom_choice, add_label, add_popup, checkbox_is_on,
+    label_field, select_tag, selected_tag, set_checkbox,
 };
 use crate::style::symbol_image;
 use objc2::rc::Retained;

@@ -156,50 +156,70 @@ define_class!(
             });
         }
 
-        /// Any popup or artifact-type checkbox changed: read the whole window back.
+        /// One control changed: write back only the field that control owns.
+        /// Reading the whole window would let an edit clobber a field whose
+        /// popup cannot represent the stored value.
         #[unsafe(method(settingsChanged:))]
-        fn settings_changed(&self, _sender: &NSMenuItem) {
+        fn settings_changed(&self, sender: &AnyObject) {
             let mtm = self.mtm();
-            let Some((hours, days, types)) = settings_window::read_controls(mtm) else { return };
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            let Some(change) = settings_window::read_change(tag) else { return };
+            let mut rescan = false;
             with_state(|state| {
-                let interval_changed = state.config.auto_clean_hours != hours;
-                state.config.auto_clean_hours = hours;
-                state.config.max_age_days = days;
-                state.config.artifact_types = types;
-                state.config.save();
-                if interval_changed {
-                    if hours > 0 {
-                        tasks::start_auto_clean(hours);
-                    } else {
-                        tasks::stop_auto_clean();
+                match change {
+                    settings_window::Change::Interval(hours) => {
+                        state.config.auto_clean_hours = hours;
+                        if hours > 0 {
+                            tasks::start_auto_clean(hours);
+                        } else {
+                            tasks::stop_auto_clean();
+                        }
                     }
+                    settings_window::Change::MaxAge(days) => state.config.max_age_days = days,
+                    settings_window::Change::Artifacts(selected) => {
+                        state.config.artifact_types =
+                            wd40::config::merge_artifact_types(&state.config.artifact_types, &selected);
+                        // Targets were found under the old type set, so they would
+                        // stay listed and deletable after a type is switched off.
+                        rescan = true;
+                    }
+                }
+                state.config.save();
+                refresh_menu(state, mtm);
+            });
+            if rescan {
+                tasks::start_scan(false);
+            }
+        }
+
+        #[unsafe(method(settingsToggleLoginItem:))]
+        fn settings_toggle_login_item(&self, sender: &AnyObject) {
+            let mtm = self.mtm();
+            let state_value: isize = unsafe { msg_send![sender, state] };
+            let failed = autostart::set_enabled(state_value == NSControlStateValueOn).err();
+            with_state(|state| {
+                if let Some(err) = failed.as_ref() {
+                    // Put the checkbox back where reality is before reporting.
+                    let auto_update = state.updater.as_ref().map(|u| u.automatic_checks());
+                    settings_window::resync(&state.config, auto_update);
+                    show_alert(mtm, "Launch at Login", err);
                 }
                 refresh_menu(state, mtm);
             });
         }
 
-        #[unsafe(method(settingsToggleLoginItem:))]
-        fn settings_toggle_login_item(&self, sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            let enable = sender.state() == NSControlStateValueOn;
-            if let Err(err) = autostart::set_enabled(enable) {
-                show_alert(mtm, "Launch at Login", &err);
-            }
-            with_state(|state| refresh_menu(state, mtm));
-        }
-
         #[unsafe(method(settingsToggleAutoUpdate:))]
-        fn settings_toggle_auto_update(&self, sender: &NSMenuItem) {
-            let enabled = sender.state() == NSControlStateValueOn;
+        fn settings_toggle_auto_update(&self, sender: &AnyObject) {
+            let state_value: isize = unsafe { msg_send![sender, state] };
             with_state(|state| {
                 if let Some(updater) = state.updater.as_ref() {
-                    updater.set_automatic_checks(enabled);
+                    updater.set_automatic_checks(state_value == NSControlStateValueOn);
                 }
             });
         }
 
         #[unsafe(method(settingsCheckForUpdates:))]
-        fn settings_check_for_updates(&self, _sender: &NSMenuItem) {
+        fn settings_check_for_updates(&self, _sender: &AnyObject) {
             with_state(|state| {
                 if let Some(updater) = state.updater.as_ref() {
                     updater.check_now();
