@@ -90,21 +90,29 @@ pub fn add_popup(
         popup.setTarget(Some(target));
         popup.setAction(Some(action));
     }
+    // A stored value outside `options` would otherwise leave item 0 selected and
+    // misrepresent the config; surface it as its own choice instead.
+    if !options.iter().any(|(value, _)| *value == active) {
+        popup.addItemWithTitle(&NSString::from_str(&format!("{active} (custom)")));
+        if let Some(item) = popup.lastItem() {
+            item.setTag(active as isize);
+        }
+    }
     select_value(&popup, active as isize);
     root.addSubview(&popup);
 }
 
-pub fn select_value(popup: &NSPopUpButton, tag: isize) {
+pub fn select_value(popup: &NSPopUpButton, tag: isize) -> bool {
     let count = popup.numberOfItems();
     for index in 0..count {
-        let item = popup.itemAtIndex(index);
-        if let Some(item) = item {
+        if let Some(item) = popup.itemAtIndex(index) {
             if item.tag() == tag {
                 popup.selectItemAtIndex(index);
-                return;
+                return true;
             }
         }
     }
+    false
 }
 
 pub fn find(root: &NSView, tag: isize) -> Option<Retained<NSView>> {
@@ -125,10 +133,25 @@ pub fn checkbox_is_on(root: &NSView, tag: isize) -> bool {
     })
 }
 
-pub fn select_tag(root: &NSView, tag: isize, value: isize) {
-    if let Some(view) = find(root, tag) {
-        let popup: &NSPopUpButton = unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
-        select_value(popup, value);
+/// Returns false when the popup has no choice carrying `value`.
+pub fn select_tag(root: &NSView, tag: isize, value: isize) -> bool {
+    match find(root, tag) {
+        Some(view) => {
+            let popup: &NSPopUpButton =
+                unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
+            select_value(popup, value)
+        }
+        None => false,
+    }
+}
+
+/// Append a choice for a config value the popup was not built with.
+pub fn add_custom_choice(root: &NSView, tag: isize, value: u64) {
+    let Some(view) = find(root, tag) else { return };
+    let popup: &NSPopUpButton = unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
+    popup.addItemWithTitle(&NSString::from_str(&format!("{value} (custom)")));
+    if let Some(item) = popup.lastItem() {
+        item.setTag(value as isize);
     }
 }
 

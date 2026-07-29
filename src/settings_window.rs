@@ -3,8 +3,8 @@
 // Deps: objc2, objc2_app_kit, objc2_foundation, crate::{autostart, style}.
 
 use crate::controls::{
-    add_button, add_checkbox_at, add_label, add_popup, checkbox_is_on, label_field, select_tag,
-    selected_tag, set_checkbox,
+    add_button, add_checkbox_at, add_custom_choice, add_label, add_popup, checkbox_is_on,
+    label_field, select_tag, selected_tag, set_checkbox,
 };
 use crate::style::symbol_image;
 use objc2::rc::Retained;
@@ -69,28 +69,59 @@ pub fn refresh(window: &NSWindow, config: &Config, auto_update: Option<bool>) {
     if let Some(enabled) = auto_update {
         set_checkbox(&root, TAG_AUTO_UPDATE, enabled);
     }
-    select_tag(&root, TAG_INTERVAL, config.auto_clean_hours as isize);
-    select_tag(&root, TAG_MAX_AGE, config.max_age_days as isize);
+    ensure_selectable(&root, TAG_INTERVAL, config.auto_clean_hours);
+    ensure_selectable(&root, TAG_MAX_AGE, config.max_age_days);
     for (index, name) in ARTIFACT_DIRS.iter().enumerate() {
         let on = config.artifact_types.iter().any(|value| value == name);
         set_checkbox(&root, TAG_ARTIFACT_BASE + index as isize, on);
     }
 }
 
-/// Read every control back into a config-shaped tuple.
-pub fn read_controls(mtm: MainThreadMarker) -> Option<(u64, u64, Vec<String>)> {
+/// What a single control edit means. Reading the whole window instead would
+/// let one edit overwrite a field whose control cannot represent the stored
+/// value (e.g. auto_clean_hours = 2 is not one of the five offered choices).
+pub enum Change {
+    Interval(u64),
+    MaxAge(u64),
+    Artifacts(Vec<String>),
+}
+
+/// Map the control that fired to the single field it owns.
+pub fn read_change(sender_tag: isize) -> Option<Change> {
     let window = WINDOW.with(|cell| cell.borrow().clone())?;
-    let _ = mtm;
     let root = window.contentView()?;
-    let hours = selected_tag(&root, TAG_INTERVAL)? as u64;
-    let days = selected_tag(&root, TAG_MAX_AGE)? as u64;
-    let types = ARTIFACT_DIRS
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| checkbox_is_on(&root, TAG_ARTIFACT_BASE + *index as isize))
-        .map(|(_, name)| (*name).to_string())
-        .collect();
-    Some((hours, days, types))
+    match sender_tag {
+        TAG_INTERVAL => Some(Change::Interval(selected_tag(&root, TAG_INTERVAL)? as u64)),
+        TAG_MAX_AGE => Some(Change::MaxAge(selected_tag(&root, TAG_MAX_AGE)? as u64)),
+        tag if is_artifact_tag(tag) => Some(Change::Artifacts(
+            ARTIFACT_DIRS
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| checkbox_is_on(&root, TAG_ARTIFACT_BASE + *index as isize))
+                .map(|(_, name)| (*name).to_string())
+                .collect(),
+        )),
+        _ => None,
+    }
+}
+
+/// Select `value`, adding a choice for it first when the popup lacks one.
+fn ensure_selectable(root: &objc2_app_kit::NSView, tag: isize, value: u64) {
+    if !select_tag(root, tag, value as isize) {
+        add_custom_choice(root, tag, value);
+        select_tag(root, tag, value as isize);
+    }
+}
+
+pub fn is_artifact_tag(tag: isize) -> bool {
+    (TAG_ARTIFACT_BASE..TAG_ARTIFACT_BASE + ARTIFACT_DIRS.len() as isize).contains(&tag)
+}
+
+/// Re-sync the visible controls with reality, used after a failed toggle.
+pub fn resync(config: &Config, auto_update: Option<bool>) {
+    if let Some(window) = WINDOW.with(|cell| cell.borrow().clone()) {
+        refresh(&window, config, auto_update);
+    }
 }
 
 fn build(
