@@ -9,6 +9,17 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
 
+/// True when any target lives under a shared cargo target root. `aid` seeds
+/// those per-session dirs with `cp -Rc` (APFS clone), so their reported sizes
+/// share physical blocks and summing them overstates what a delete returns.
+/// See docs/apfs-clone-overcount.md.
+pub fn sizes_may_overlap(paths: &[std::path::PathBuf]) -> bool {
+    paths.iter().any(|path| {
+        path.components()
+            .any(|component| component.as_os_str() == ".cargo-target")
+    })
+}
+
 #[derive(Clone)]
 pub struct TargetDir {
     pub path: PathBuf,
@@ -507,5 +518,26 @@ pub fn human_size(bytes: u64) -> String {
         format!("{}{}", bytes, units[unit])
     } else {
         format!("{:.1}{}", value, units[unit])
+    }
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    use super::sizes_may_overlap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn shared_cargo_root_targets_can_overlap() {
+        let paths = vec![PathBuf::from("/Users/x/.cargo-target/proj/session-a")];
+        assert!(sizes_may_overlap(&paths));
+    }
+
+    #[test]
+    fn ordinary_project_targets_do_not_overlap() {
+        let paths = vec![
+            PathBuf::from("/Users/x/Develop/proj/target"),
+            PathBuf::from("/Users/x/Develop/web/node_modules"),
+        ];
+        assert!(!sizes_may_overlap(&paths));
     }
 }

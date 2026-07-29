@@ -6,6 +6,7 @@ use crate::updater::Updater;
 use objc2::rc::Retained;
 use objc2_app_kit::NSStatusItem;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::time::Duration;
 use wd40::config::Config;
 use wd40::disk::{disk_space, sum_bytes, DiskSpace};
@@ -33,15 +34,19 @@ impl AppState {
         Duration::from_secs(self.config.max_age_days.saturating_mul(SECONDS_PER_DAY))
     }
 
-    /// Capacity of the volume holding the first scan dir that still exists.
-    pub fn disk_stats(&self) -> Option<DiskSpace> {
+    /// A still-existing path on the volume being reported on.
+    pub fn reference_path(&self) -> Option<PathBuf> {
         self.config
             .scan_dirs
             .iter()
             .find(|path| path.exists())
-            .map(|path| path.as_path())
-            .or_else(|| self.targets.first().map(|target| target.path.as_path()))
-            .and_then(disk_space)
+            .or_else(|| self.targets.first().map(|target| &target.path))
+            .cloned()
+    }
+
+    /// Capacity of the volume holding the first scan dir that still exists.
+    pub fn disk_stats(&self) -> Option<DiskSpace> {
+        self.reference_path().as_deref().and_then(disk_space)
     }
 }
 

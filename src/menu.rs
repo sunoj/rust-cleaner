@@ -12,7 +12,7 @@ use objc2::{sel, MainThreadOnly};
 use objc2_app_kit::{NSColor, NSFont, NSMenu, NSMenuItem};
 use objc2_foundation::{ns_string, MainThreadMarker, NSString};
 use wd40::disk::sum_bytes;
-use wd40::scanner::{human_size, ArtifactGroup, ArtifactKind, TargetDir};
+use wd40::scanner::{human_size, sizes_may_overlap, ArtifactGroup, ArtifactKind, TargetDir};
 
 const INFO_LIMIT: usize = 15;
 const MAX_BAR: usize = 8;
@@ -63,9 +63,18 @@ fn build_menu(menu: &NSMenu, state: &AppState, target: &AnyObject, mtm: MainThre
         add_groups(menu, state, target, sizing, mtm);
     }
 
+    let overlap = sizes_may_overlap(&state.targets.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
     if !sizing {
-        let label = format!("Clean All \u{2014} {}", human_size(total));
+        // Never state a flat figure when clone sharing can inflate it.
+        let label = if overlap {
+            format!("Clean All \u{2014} up to {}", human_size(total))
+        } else {
+            format!("Clean All \u{2014} {}", human_size(total))
+        };
         add_action(menu, &label, sel!(handleCleanAll:), target, mtm);
+    }
+    if overlap && !sizing {
+        add_caption(menu, "sizes overlap where builds share APFS clones", mtm);
     }
     let old_label = format!("Clean Older Than {} Days", state.config.max_age_days);
     add_action(menu, &old_label, sel!(handleCleanOld:), target, mtm);
