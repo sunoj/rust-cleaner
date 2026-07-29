@@ -1,242 +1,258 @@
-// Menu bar UI construction for WD-40. Builds the NSMenu with scan results and actions.
+// Menu bar UI for WD-40: status button, grouped scan results, settings, updates.
 // Exports: `refresh_menu`, `project_name`.
-// Deps: objc2, objc2_app_kit, objc2_foundation, crate::icon, crate::scanner.
+// Deps: objc2, objc2_app_kit, objc2_foundation, crate::{icon, settings, style}.
 
 use crate::icon::{rust_text_color, rusty_icon};
+use crate::settings::build_settings_menu;
+use crate::style::{caption_font, menu_font, symbol_image, tinted, truncate, Row};
 use crate::{AppState, HANDLER};
-use rust_cleaner::disk::sum_bytes;
-use rust_cleaner::scanner::{human_size, ArtifactGroup, ArtifactKind, TargetDir};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{sel, MainThreadOnly};
-use objc2_app_kit::{
-    NSMenu, NSMenuItem, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
-};
-use objc2_foundation::{ns_string, MainThreadMarker, NSDictionary, NSString, NSAttributedString};
+use objc2_app_kit::{NSColor, NSFont, NSMenu, NSMenuItem};
+use objc2_foundation::{ns_string, MainThreadMarker, NSString};
+use wd40::disk::sum_bytes;
+use wd40::scanner::{human_size, ArtifactGroup, ArtifactKind, TargetDir};
 
 const INFO_LIMIT: usize = 15;
-const MAX_BAR: usize = 12;
+const MAX_BAR: usize = 8;
+const NAME_CHARS: usize = 28;
 
 pub fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
-    let total = state.total_size();
-
-    if let Some(button) = state.status_item.button(mtm) {
-        if let Some(img) = rusty_icon(total) {
-            button.setImage(Some(&img));
-        }
-        if total < 1024 * 1024 * 1024 {
-            button.setTitle(ns_string!(""));
-        } else {
-            let title_text = format!(" {}", human_size(total));
-            let color = rust_text_color(total);
-            let font = NSFont::menuBarFontOfSize(0.0);
-            let color_obj: &AnyObject = unsafe { &*(&*color as *const _ as *const AnyObject) };
-            let font_obj: &AnyObject = unsafe { &*(&*font as *const _ as *const AnyObject) };
-            let fg_key: &NSString = unsafe { NSForegroundColorAttributeName };
-            let font_key: &NSString = unsafe { NSFontAttributeName };
-            let attrs = NSDictionary::<NSString, AnyObject>::from_slices::<NSString>(
-                &[fg_key, font_key],
-                &[color_obj, font_obj],
-            );
-            let attr_str = unsafe {
-                NSAttributedString::new_with_attributes(&NSString::from_str(&title_text), &attrs)
-            };
-            button.setAttributedTitle(&attr_str);
-        }
-    }
+    update_status_button(state, mtm);
 
     let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("WD-40"));
     menu.setAutoenablesItems(false);
 
-    add_disabled(&menu, "WD-40", mtm);
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-
     HANDLER.with(|cell| {
         let handler = cell.borrow();
-        let handler = match handler.as_ref() {
-            Some(h) => h,
-            None => return,
-        };
+        let Some(handler) = handler.as_ref() else { return };
         let target: &AnyObject = unsafe { &*(handler.as_ref() as *const _ as *const AnyObject) };
-
-        let sizing = total == 0 && !state.targets.is_empty();
-
-        if state.targets.is_empty() {
-            add_disabled(&menu, "No targets found", mtm);
-        } else {
-            let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1).max(1);
-            let mut shown = 0usize;
-
-            for &group in ArtifactGroup::ALL {
-                let items: Vec<(usize, &TargetDir)> = state
-                    .targets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, td)| td.kind.group() == group)
-                    .collect();
-                if items.is_empty() {
-                    continue;
-                }
-
-                let group_size = sum_bytes(items.iter().map(|(_, td)| td.size_bytes));
-                let header = if sizing {
-                    format!("{} — {} projects", group.label(), items.len())
-                } else {
-                    format!("{} — {}", group.label(), human_size(group_size))
-                };
-                add_disabled(&menu, &header, mtm);
-
-                let info_item = unsafe {
-                    NSMenuItem::initWithTitle_action_keyEquivalent(
-                        NSMenuItem::alloc(mtm),
-                        &NSString::from_str("  \u{24d8} Scan rules"),
-                        Some(sel!(handleGroupInfo:)),
-                        ns_string!(""),
-                    )
-                };
-                info_item.setTag(group.tag());
-                unsafe { info_item.setTarget(Some(target)) };
-                menu.addItem(&info_item);
-
-                let budget = INFO_LIMIT.saturating_sub(shown);
-                let show_count = items.len().min(budget);
-                for &(i, td) in items.iter().take(show_count) {
-                    let title = if sizing {
-                        format!("  {}  [{}]  —  ...", project_name(td), td.kind.label())
-                    } else {
-                        let bar_len = ((td.size_bytes as f64 / max_size as f64) * MAX_BAR as f64)
-                            .ceil()
-                            .max(1.0) as usize;
-                        format!(
-                            "  {}  [{}]  —  {}  {}",
-                            project_name(td), td.kind.label(), human_size(td.size_bytes), "█".repeat(bar_len),
-                        )
-                    };
-
-                    let item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(&title),
-                            Some(sel!(handleCleanProject:)),
-                            ns_string!(""),
-                        )
-                    };
-                    item.setTag(i as isize);
-                    unsafe { item.setTarget(Some(target)) };
-                    menu.addItem(&item);
-                    shown += 1;
-                }
-                if items.len() > show_count {
-                    add_disabled(&menu, &format!("  ... {} more", items.len() - show_count), mtm);
-                }
-
-                if !sizing {
-                    let clean_label = format!("  Clean {} ({})", group.label(), human_size(group_size));
-                    let clean_item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(&clean_label),
-                            Some(sel!(handleCleanGroup:)),
-                            ns_string!(""),
-                        )
-                    };
-                    clean_item.setTag(group.tag());
-                    unsafe { clean_item.setTarget(Some(target)) };
-                    menu.addItem(&clean_item);
-                }
-
-                menu.addItem(&NSMenuItem::separatorItem(mtm));
-            }
-        }
-
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-        if sizing {
-            add_disabled(&menu, &format!("{} projects — computing sizes...", state.targets.len()), mtm);
-        } else {
-            add_disabled(&menu, &format!("Total: {} in {} projects", human_size(total), state.targets.len()), mtm);
-            if let Some(free_bytes) = state.remaining_disk_space() {
-                add_disabled(&menu, &format!("Remaining Disk Space: {}", human_size(free_bytes)), mtm);
-            }
-        }
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-        if !sizing {
-            add_action(&menu, &format!("Clean All ({})", human_size(total)), sel!(handleCleanAll:), target, mtm);
-        }
-        add_action(&menu, &format!("Clean Old (>{}d)", state.config.max_age_days), sel!(handleCleanOld:), target, mtm);
-        add_action(&menu, "Rescan", sel!(handleRescan:), target, mtm);
-
-        // Auto Clean submenu
-        let auto_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Auto Clean"));
-        auto_menu.setAutoenablesItems(false);
-
-        add_disabled(&auto_menu, "Interval", mtm);
-        let intervals: &[(u64, &str)] = &[(0, "Off"), (1, "Every 1h"), (6, "Every 6h"), (12, "Every 12h"), (24, "Every 24h")];
-        for &(hours, label) in intervals {
-            let text = if hours == state.config.auto_clean_hours {
-                format!("{} ✓", label)
-            } else {
-                label.to_string()
-            };
-            let item = unsafe {
-                NSMenuItem::initWithTitle_action_keyEquivalent(
-                    NSMenuItem::alloc(mtm), &NSString::from_str(&text), Some(sel!(handleSetAutoInterval:)), ns_string!(""),
-                )
-            };
-            item.setTag(hours as isize);
-            unsafe { item.setTarget(Some(target)) };
-            auto_menu.addItem(&item);
-        }
-
-        auto_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        add_disabled(&auto_menu, "Clean older than", mtm);
-        let ages: &[(u64, &str)] = &[(3, "3 days"), (7, "7 days"), (14, "14 days"), (30, "30 days")];
-        for &(days, label) in ages {
-            let text = if days == state.config.max_age_days {
-                format!("{} ✓", label)
-            } else {
-                label.to_string()
-            };
-            let item = unsafe {
-                NSMenuItem::initWithTitle_action_keyEquivalent(
-                    NSMenuItem::alloc(mtm), &NSString::from_str(&text), Some(sel!(handleSetMaxAge:)), ns_string!(""),
-                )
-            };
-            item.setTag(days as isize);
-            unsafe { item.setTarget(Some(target)) };
-            auto_menu.addItem(&item);
-        }
-
-        let auto_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), ns_string!("Auto Clean"), None, ns_string!(""))
-        };
-        auto_item.setSubmenu(Some(&auto_menu));
-        menu.addItem(&auto_item);
-
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-        add_action(&menu, "Quit", sel!(quit:), target, mtm);
+        build_menu(&menu, state, target, mtm);
     });
 
     state.status_item.setMenu(Some(&menu));
 }
 
-fn add_disabled(menu: &NSMenu, text: &str, mtm: MainThreadMarker) {
-    let item = unsafe {
+fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
+    let total = state.total_size();
+    let Some(button) = state.status_item.button(mtm) else { return };
+    if let Some(image) = rusty_icon(total) {
+        button.setImage(Some(&image));
+    }
+    if total < 1024 * 1024 * 1024 {
+        button.setTitle(ns_string!(""));
+        return;
+    }
+    let title = format!(" {}", human_size(total));
+    let font = NSFont::menuBarFontOfSize(0.0);
+    button.setAttributedTitle(&tinted(&title, &font, &rust_text_color(total)));
+}
+
+fn build_menu(menu: &NSMenu, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
+    let total = state.total_size();
+    let sizing = total == 0 && !state.targets.is_empty();
+
+    add_header(menu, state, total, sizing, mtm);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+    if state.targets.is_empty() {
+        add_caption(menu, "Nothing to clean \u{2014} everything is tidy", mtm);
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+    } else {
+        add_groups(menu, state, target, sizing, mtm);
+    }
+
+    if !sizing {
+        let label = format!("Clean All \u{2014} {}", human_size(total));
+        add_action(menu, &label, sel!(handleCleanAll:), target, mtm);
+    }
+    let old_label = format!("Clean Older Than {} Days", state.config.max_age_days);
+    add_action(menu, &old_label, sel!(handleCleanOld:), target, mtm);
+    let rescan = add_action(menu, "Rescan", sel!(handleRescan:), target, mtm);
+    rescan.setKeyEquivalent(ns_string!("r"));
+
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let settings = new_item(ns_string!("Settings"), None, mtm);
+    settings.setSubmenu(Some(&build_settings_menu(state, target, mtm)));
+    menu.addItem(&settings);
+    add_updates_item(menu, state, mtm);
+
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let quit = add_action(menu, "Quit WD-40", sel!(quit:), target, mtm);
+    quit.setKeyEquivalent(ns_string!("q"));
+}
+
+fn add_header(menu: &NSMenu, state: &AppState, total: u64, sizing: bool, mtm: MainThreadMarker) {
+    let mut row = Row::new();
+    row.push("WD-40", None);
+    row.tab();
+    if sizing {
+        row.push("scanning\u{2026}", Some(NSColor::secondaryLabelColor()));
+    } else {
+        row.push(&human_size(total), Some(rust_text_color(total)));
+    }
+    let item = new_item(&NSString::from_str(""), None, mtm);
+    item.setAttributedTitle(Some(&row.build(&menu_font())));
+    item.setEnabled(false);
+    menu.addItem(&item);
+
+    let mut caption = format!("v{}", crate::updater::bundle_version());
+    if let Some(disk) = state.disk_stats() {
+        caption.push_str(&format!(
+            "  \u{2022}  {} free of {}",
+            human_size(disk.free_bytes),
+            human_size(disk.total_bytes)
+        ));
+    }
+    add_caption(menu, &caption, mtm);
+}
+
+fn add_groups(
+    menu: &NSMenu,
+    state: &AppState,
+    target: &AnyObject,
+    sizing: bool,
+    mtm: MainThreadMarker,
+) {
+    let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1).max(1);
+    let mut shown = 0usize;
+
+    for &group in ArtifactGroup::ALL {
+        let items: Vec<(usize, &TargetDir)> = state
+            .targets
+            .iter()
+            .enumerate()
+            .filter(|(_, td)| td.kind.group() == group)
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+
+        let group_size = sum_bytes(items.iter().map(|(_, td)| td.size_bytes));
+        add_group_header(menu, group, items.len(), group_size, sizing, mtm);
+
+        // The kind only adds information where a group mixes kinds (target vs
+        // tmp-target); elsewhere it just repeats the header and steals width.
+        let first_kind = items[0].1.kind.label();
+        let mixed = items.iter().any(|(_, td)| td.kind.label() != first_kind);
+
+        let visible = items.len().min(INFO_LIMIT.saturating_sub(shown));
+        for &(index, td) in items.iter().take(visible) {
+            let item = new_item(&NSString::from_str(""), Some(sel!(handleCleanProject:)), mtm);
+            let row = project_row(td, max_size, sizing, mixed);
+            item.setAttributedTitle(Some(&row.build(&menu_font())));
+            item.setTag(index as isize);
+            unsafe { item.setTarget(Some(target)) };
+            menu.addItem(&item);
+            shown += 1;
+        }
+        if items.len() > visible {
+            add_caption(menu, &format!("{} more not shown", items.len() - visible), mtm);
+        }
+
+        if !sizing {
+            let label = format!("Clean {} \u{2014} {}", group.label(), human_size(group_size));
+            let clean = add_action(menu, &label, sel!(handleCleanGroup:), target, mtm);
+            clean.setTag(group.tag());
+            if let Some(image) = symbol_image("trash", 13.0) {
+                clean.setImage(Some(&image));
+            }
+        }
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+    }
+}
+
+fn add_group_header(
+    menu: &NSMenu,
+    group: ArtifactGroup,
+    count: usize,
+    group_size: u64,
+    sizing: bool,
+    mtm: MainThreadMarker,
+) {
+    let mut row = Row::new();
+    row.push(group.label(), Some(NSColor::secondaryLabelColor()));
+    row.push(&format!("  {count}"), Some(NSColor::tertiaryLabelColor()));
+    row.tab();
+    if !sizing {
+        row.push(&human_size(group_size), Some(NSColor::secondaryLabelColor()));
+    }
+    let item = new_item(&NSString::from_str(""), None, mtm);
+    item.setAttributedTitle(Some(&row.build(&caption_font())));
+    item.setEnabled(false);
+    if let Some(image) = symbol_image(group.symbol(), 12.0) {
+        item.setImage(Some(&image));
+    }
+    menu.addItem(&item);
+}
+
+fn project_row(td: &TargetDir, max_size: u64, sizing: bool, show_kind: bool) -> Row {
+    let mut row = Row::new();
+    // Name and kind share one column; overflowing it would shove the size past
+    // its tab stop and wrap the bar onto a second line.
+    let kind = if show_kind { td.kind.label() } else { "" };
+    let budget = NAME_CHARS.saturating_sub(if kind.is_empty() { 0 } else { kind.chars().count() + 2 });
+    row.push(&truncate(&project_name(td), budget), None);
+    if !kind.is_empty() {
+        row.push(&format!("  {kind}"), Some(NSColor::tertiaryLabelColor()));
+    }
+    row.tab();
+    if sizing {
+        row.push("\u{2026}", Some(NSColor::tertiaryLabelColor()));
+        return row;
+    }
+    row.push(&human_size(td.size_bytes), Some(NSColor::secondaryLabelColor()));
+    row.tab();
+    let ratio = td.size_bytes as f64 / max_size as f64;
+    let filled = (ratio * MAX_BAR as f64).ceil().max(1.0) as usize;
+    row.push(&"\u{2588}".repeat(filled.min(MAX_BAR)), Some(NSColor::tertiaryLabelColor()));
+    row
+}
+
+fn add_updates_item(menu: &NSMenu, state: &AppState, mtm: MainThreadMarker) {
+    let Some(updater) = state.updater.as_ref() else { return };
+    let item = new_item(ns_string!("Check for Updates\u{2026}"), Some(sel!(checkForUpdates:)), mtm);
+    unsafe { item.setTarget(Some(updater.target())) };
+    item.setEnabled(updater.can_check());
+    menu.addItem(&item);
+}
+
+pub(crate) fn new_item(
+    title: &NSString,
+    action: Option<Sel>,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm), &NSString::from_str(text), None, ns_string!("")
+            NSMenuItem::alloc(mtm),
+            title,
+            action,
+            ns_string!(""),
         )
-    };
+    }
+}
+
+pub(crate) fn add_caption(menu: &NSMenu, text: &str, mtm: MainThreadMarker) {
+    let mut row = Row::new();
+    row.push(text, Some(NSColor::secondaryLabelColor()));
+    let item = new_item(&NSString::from_str(""), None, mtm);
+    item.setAttributedTitle(Some(&row.build(&caption_font())));
     item.setEnabled(false);
     menu.addItem(&item);
 }
 
-fn add_action(menu: &NSMenu, text: &str, action: Sel, target: &AnyObject, mtm: MainThreadMarker) {
-    let item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm), &NSString::from_str(text), Some(action), ns_string!("")
-        )
-    };
+pub(crate) fn add_action(
+    menu: &NSMenu,
+    text: &str,
+    action: Sel,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    let item = new_item(&NSString::from_str(text), Some(action), mtm);
     unsafe { item.setTarget(Some(target)) };
     menu.addItem(&item);
+    item
 }
 
 pub fn project_name(td: &TargetDir) -> String {
@@ -258,9 +274,9 @@ pub fn project_name(td: &TargetDir) -> String {
                 let aid_root = home.join(".aid").join("worktrees");
                 if let Ok(rel) = td.path.strip_prefix(&aid_root) {
                     if let Some(parent) = rel.parent() {
-                        let s = parent.to_string_lossy();
-                        if !s.is_empty() {
-                            return s.into_owned();
+                        let name = parent.to_string_lossy();
+                        if !name.is_empty() {
+                            return name.into_owned();
                         }
                     }
                 }

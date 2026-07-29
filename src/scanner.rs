@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
 
+#[derive(Clone)]
 pub struct TargetDir {
     pub path: PathBuf,
     pub size_bytes: u64,
@@ -62,6 +63,15 @@ impl ArtifactGroup {
             Self::Rust => "Rust",
             Self::NodeModules => "Node Modules",
             Self::BuildOutput => "Build Output",
+        }
+    }
+
+    /// SF Symbol shown next to the group header.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Rust => "gearshape.2",
+            Self::NodeModules => "shippingbox",
+            Self::BuildOutput => "hammer",
         }
     }
 

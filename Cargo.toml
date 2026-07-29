@@ -1,17 +1,21 @@
 [package]
-name = "rust-cleaner"
-version = "0.4.2"
+name = "wd40"
+version = "0.5.0"
 edition = "2021"
-description = "Find and clean dev build artifacts (target/, node_modules/, .next/, dist/, build/) on macOS"
+description = "WD-40 — find and clean dev build artifacts (target/, node_modules/, .next/, dist/, build/) on macOS"
 license = "MIT"
-repository = "https://github.com/sunoj/rust-cleaner"
-homepage = "https://rust-cleaner.agent-tools.org"
-keywords = ["macos", "rust", "clean", "target", "menubar"]
+repository = "https://github.com/sunoj/wd-40"
+homepage = "https://github.com/sunoj/wd-40"
+keywords = ["macos", "cleaner", "target", "node-modules", "menubar"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
+[lib]
+name = "wd40"
+path = "src/lib.rs"
+
 [[bin]]
-name = "rust-cleaner"
+name = "wd40-menu"
 path = "src/main.rs"
 
 [[bin]]
@@ -20,8 +24,8 @@ path = "src/bin/wd40.rs"
 
 [dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSObject", "NSString", "NSThread", "NSTimer", "NSDate", "NSObjCRuntime", "NSArray", "NSAttributedString", "NSDictionary"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSControl", "NSResponder", "NSImage", "NSRunningApplication", "NSColor", "NSBezierPath", "NSGraphics", "NSAttributedString", "NSFont", "NSAlert", "NSPanel", "NSWindow"] }
+objc2-foundation = { version = "0.3", features = ["NSObject", "NSString", "NSThread", "NSTimer", "NSDate", "NSObjCRuntime", "NSArray", "NSAttributedString", "NSDictionary", "NSBundle"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSControl", "NSResponder", "NSImage", "NSRunningApplication", "NSColor", "NSBezierPath", "NSGraphics", "NSAttributedString", "NSFont", "NSAlert", "NSPanel", "NSWindow", "NSParagraphStyle", "NSText"] }
 walkdir = "2"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }

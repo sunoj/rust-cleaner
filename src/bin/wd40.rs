@@ -1,9 +1,9 @@
 // WD-40 CLI: scan and clean dev build artifacts from the terminal.
 // Usage: wd40 [scan|clean|clean-old|help] [options]
-use rust_cleaner::cleaner::{clean_all, clean_old};
-use rust_cleaner::config::Config;
-use rust_cleaner::disk::sum_bytes;
-use rust_cleaner::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
+use wd40::cleaner::{clean_all, clean_old};
+use wd40::config::Config;
+use wd40::disk::sum_bytes;
+use wd40::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
 use std::time::Duration;
 
 const SECONDS_PER_DAY: u64 = 86_400;

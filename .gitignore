@@ -1,4 +1,7 @@
 /target
 *.app
+dist/
+.sparkle/
 AppIcon.iconset
 .wrangler/
+.DS_Store

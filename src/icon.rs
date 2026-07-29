@@ -1,4 +1,4 @@
-// Icon rendering for Rust Cleaner. Generates rusty SF Symbol icons based on disk usage.
+// Icon rendering for WD-40. Generates rusty SF Symbol icons based on disk usage.
 // Exports: `rusty_icon`, `rust_text_color`.
 // Deps: objc2, objc2_app_kit, objc2_foundation.
 

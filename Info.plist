@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Rust Cleaner</string>
+    <string>WD-40</string>
     <key>CFBundleDisplayName</key>
-    <string>Rust Cleaner</string>
+    <string>WD-40</string>
     <key>CFBundleIdentifier</key>
-    <string>com.wd40.rust-cleaner</string>
+    <string>com.wd40.app</string>
     <key>CFBundleVersion</key>
-    <string>0.3.0</string>
+    <string>__BUILD__</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.3.0</string>
+    <string>__VERSION__</string>
     <key>CFBundleExecutable</key>
-    <string>rust-cleaner</string>
+    <string>wd40-menu</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -24,5 +24,13 @@
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>SUFeedURL</key>
+    <string>https://wd40-release.sunoj-mings.workers.dev/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>RU1CL2LFNZs4AhiBQ5ZoHelifYyJ5yv2I7rEi7mSahM=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>

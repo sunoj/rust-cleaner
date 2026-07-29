@@ -6,15 +6,17 @@ WD-40 finds and cleans build artifact directories (`target/`, `node_modules/`, `
 
 ## Two Ways to Use
 
-### Menu Bar App (`rust-cleaner`)
+### Menu Bar App (`WD-40.app`)
 
 A native macOS status bar utility with zero-config scanning.
 
 - **Visual Status**: Icon gets "rustier" as build artifacts grow
-- **Grouped Results**: Rust, Node Modules, Build Output — with per-group totals
+- **Grouped Results**: Rust, Node Modules, Build Output — with aligned size columns and usage bars
 - **One-Click Clean**: Individual projects, by group, all, or old only
 - **Auto Scan**: Refreshes every 5 minutes
 - **Auto Clean**: Configurable interval (1h/6h/12h/24h) + age threshold
+- **Launch at Login**: Toggle straight from the Settings submenu
+- **Auto Update**: Sparkle checks the release feed daily; `Check for Updates…` runs it on demand
 - **Two-Phase Scan**: Instant discovery, background size computation
 
 ### CLI (`wd40`)
@@ -52,18 +54,15 @@ Total: 4.3G in 17 targets
 ### From Source
 
 ```bash
-# Build both binaries
-make build
-
-# Install menu bar app to /Applications
+# Menu bar app → /Applications (downloads Sparkle, signs the bundle)
 make install
 
-# Install CLI to PATH
-cp "$CARGO_TARGET_DIR/release/wd40" ~/.cargo/bin/
-
-# Optional: auto-start menu bar app on login
-make autostart
+# CLI → ~/.cargo/bin/wd40
+make cli
 ```
+
+Enable **Launch at Login** from the app's Settings submenu; it installs the
+`com.wd40.app` LaunchAgent for the current user.
 
 ## Configuration
 
@@ -86,6 +85,25 @@ auto_clean_hours = 6   # 0 to disable
 | `.next/` | Contains `cache/` or `static/` |
 | `dist/`, `build/` | Parent has `package.json`, `Cargo.toml`, `build.gradle`, or `platformio.ini` |
 | `/tmp/cc-target-*` | Auto-detected temporary Cargo build dirs |
+
+## Updates
+
+The app ships with [Sparkle](https://sparkle-project.org) in
+`Contents/Frameworks` and reads its feed from `SUFeedURL` in `Info.plist`.
+Sparkle is loaded at runtime, so `cargo run` still works on an unbundled build —
+the update menu item is simply absent there.
+
+Releases are published to a Cloudflare Worker + R2 relay (see [`relay/`](relay)):
+
+```bash
+UPLOAD_SECRET=... make release VERSION=0.5.0 NOTES="What changed"
+```
+
+`scripts/release.sh` builds the bundle, EdDSA-signs the zip with
+`.sparkle/bin/sign_update`, writes `appcast.xml`, and uploads both. The signing
+key lives in the login Keychain (service `https://sparkle-project.org`, account
+`ed25519`) and is **shared with sibling apps** — never run `generate_keys -f`,
+it would overwrite the single global key slot and break every feed.
 
 ## Performance
 

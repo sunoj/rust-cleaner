@@ -1,49 +1,42 @@
 // Entry point for the macOS WD-40 menu bar app.
-// Uses objc2 AppKit bindings for native macOS status bar integration.
+// Owns the status item, app state, and the Objective-C menu action handler.
+// Deps: objc2 AppKit bindings; background work lives in `tasks`.
+mod autostart;
 mod icon;
 mod menu;
+mod settings;
+mod style;
+mod tasks;
+mod updater;
 
 use menu::refresh_menu;
-use rust_cleaner::cleaner::{clean_all, clean_old};
-use rust_cleaner::config::Config;
-use rust_cleaner::disk::{disk_space, sum_bytes};
-use rust_cleaner::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, MainThreadOnly};
+use objc2::{define_class, msg_send, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem,
-    NSStatusBar, NSStatusItem,
+    NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSControlStateValueOn,
+    NSMenuItem, NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{ns_string, MainThreadMarker, NSObject, NSString, NSTimer};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString, NSTimer};
 use std::cell::RefCell;
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
+use updater::Updater;
+use wd40::config::Config;
+use wd40::disk::{disk_space, sum_bytes, DiskSpace};
+use wd40::scanner::ArtifactGroup;
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
-static CLEANING: AtomicBool = AtomicBool::new(false);
-static SCANNING: AtomicBool = AtomicBool::new(false);
-static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
-static ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
-static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
-static SIZES_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
-
 thread_local! {
-    static APP_STATE: RefCell<Option<AppState>> = RefCell::new(None);
-    pub(crate) static HANDLER: RefCell<Option<Retained<MenuHandler>>> = RefCell::new(None);
-    static ANIM_TIMER: RefCell<Option<Retained<NSTimer>>> = RefCell::new(None);
-    static AUTO_TIMER: RefCell<Option<Retained<NSTimer>>> = RefCell::new(None);
-    static SCAN_TIMER: RefCell<Option<Retained<NSTimer>>> = RefCell::new(None);
-    static SHINE_TIMER: RefCell<Option<Retained<NSTimer>>> = RefCell::new(None);
+    static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
+    pub(crate) static HANDLER: RefCell<Option<Retained<MenuHandler>>> = const { RefCell::new(None) };
 }
 
-struct AppState {
+pub(crate) struct AppState {
     config: Config,
-    targets: Vec<TargetDir>,
+    targets: Vec<wd40::scanner::TargetDir>,
     status_item: Retained<NSStatusItem>,
+    updater: Option<Updater>,
 }
 
 impl AppState {
@@ -51,19 +44,19 @@ impl AppState {
         sum_bytes(self.targets.iter().map(|t| t.size_bytes))
     }
 
-    fn remaining_disk_space(&self) -> Option<u64> {
-        let path = self
-            .targets
-            .first()
-            .map(|target| target.path.as_path())
-            .or_else(|| {
-                self.config
-                    .scan_dirs
-                    .iter()
-                    .find(|path| path.exists())
-                    .map(|path| path.as_path())
-            })?;
-        disk_space(path).map(|stats| stats.free_bytes)
+    fn max_age(&self) -> Duration {
+        Duration::from_secs(self.config.max_age_days.saturating_mul(SECONDS_PER_DAY))
+    }
+
+    /// Capacity of the volume holding the first scan dir that still exists.
+    fn disk_stats(&self) -> Option<DiskSpace> {
+        self.config
+            .scan_dirs
+            .iter()
+            .find(|path| path.exists())
+            .map(|path| path.as_path())
+            .or_else(|| self.targets.first().map(|target| target.path.as_path()))
+            .and_then(disk_space)
     }
 }
 
@@ -76,95 +69,55 @@ define_class!(
     impl MenuHandler {
         #[unsafe(method(handleCleanProject:))]
         fn handle_clean_project(&self, sender: &NSMenuItem) {
-            let idx = sender.tag() as usize;
+            let index = sender.tag() as usize;
             let work = with_state_ret(|state| {
-                state.targets.get(idx).map(|td| (td.path.clone(), td.size_bytes))
-            }).flatten();
+                state.targets.get(index).map(|td| (td.path.clone(), td.size_bytes))
+            })
+            .flatten();
             if let Some((path, size)) = work {
-                start_clean(move || {
-                    match std::fs::remove_dir_all(&path) {
-                        Ok(()) => println!("Cleaned {} ({})", path.display(), human_size(size)),
-                        Err(e) => eprintln!("Failed {}: {}", path.display(), e),
-                    }
-                });
+                tasks::spawn_remove(path, size);
             }
         }
 
         #[unsafe(method(handleCleanAll:))]
         fn handle_clean_all(&self, _sender: &NSMenuItem) {
-            let targets: Vec<_> = with_state_ret(|state| {
-                state.targets.iter().map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect()
-            }).unwrap_or_default();
-            start_clean(move || {
-                let tds: Vec<TargetDir> = targets.into_iter()
-                    .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
-                    .collect();
-                let r = clean_all(&tds);
-                if r.removed_count > 0 {
-                    println!("Clean All freed {} from {} dirs", human_size(r.freed_bytes), r.removed_count);
-                }
-            });
+            let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
+            tasks::spawn_clean_all(targets, "Clean All");
         }
 
         #[unsafe(method(handleCleanOld:))]
         fn handle_clean_old(&self, _sender: &NSMenuItem) {
-            let work = with_state_ret(|state| {
-                let targets: Vec<_> = state.targets.iter()
-                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect();
-                let max_age = Duration::from_secs(state.config.max_age_days.saturating_mul(SECONDS_PER_DAY));
-                (targets, max_age)
-            });
-            if let Some((targets, max_age)) = work {
-                start_clean(move || {
-                    let tds: Vec<TargetDir> = targets.into_iter()
-                        .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
-                        .collect();
-                    let r = clean_old(&tds, max_age);
-                    if r.removed_count > 0 {
-                        println!("Clean Old freed {} from {} dirs", human_size(r.freed_bytes), r.removed_count);
-                    }
-                });
+            if let Some((targets, max_age)) =
+                with_state_ret(|state| (state.targets.clone(), state.max_age()))
+            {
+                tasks::spawn_clean_old(targets, max_age, "Clean Old");
             }
         }
 
         #[unsafe(method(handleCleanGroup:))]
         fn handle_clean_group(&self, sender: &NSMenuItem) {
             let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
-            let targets: Vec<_> = with_state_ret(|state| {
-                state.targets.iter()
-                    .filter(|t| t.kind.group() == group)
-                    .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind))
-                    .collect()
-            }).unwrap_or_default();
-            let label = group.label();
-            start_clean(move || {
-                let tds: Vec<TargetDir> = targets.into_iter()
-                    .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
-                    .collect();
-                let r = clean_all(&tds);
-                if r.removed_count > 0 {
-                    println!("Clean {} freed {} from {} dirs", label, human_size(r.freed_bytes), r.removed_count);
-                }
-            });
+            let targets = with_state_ret(|state| {
+                state
+                    .targets
+                    .iter()
+                    .filter(|td| td.kind.group() == group)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+            tasks::spawn_clean_all(targets, group.label());
         }
 
         #[unsafe(method(handleGroupInfo:))]
         fn handle_group_info(&self, sender: &NSMenuItem) {
             let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
-            let mtm = self.mtm();
-            let alert = NSAlert::new(mtm);
-            alert.setMessageText(&NSString::from_str(group.label()));
-            alert.setInformativeText(&NSString::from_str(group.description()));
-            alert.setAlertStyle(NSAlertStyle::Informational);
-            let app = NSApplication::sharedApplication(mtm);
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
-            alert.runModal();
+            show_alert(self.mtm(), group.label(), group.description());
         }
 
         #[unsafe(method(handleRescan:))]
         fn handle_rescan(&self, _sender: &NSMenuItem) {
-            start_scan(false);
+            tasks::start_scan(false);
         }
 
         #[unsafe(method(handleSetAutoInterval:))]
@@ -175,9 +128,9 @@ define_class!(
                 state.config.auto_clean_hours = hours;
                 state.config.save();
                 if hours > 0 {
-                    start_auto_clean(hours);
+                    tasks::start_auto_clean(hours);
                 } else {
-                    stop_auto_clean();
+                    tasks::stop_auto_clean();
                 }
                 refresh_menu(state, mtm);
             });
@@ -194,151 +147,69 @@ define_class!(
             });
         }
 
+        #[unsafe(method(handleToggleLoginItem:))]
+        fn handle_toggle_login_item(&self, sender: &NSMenuItem) {
+            let mtm = self.mtm();
+            let enable = sender.state() != NSControlStateValueOn;
+            if let Err(err) = autostart::set_enabled(enable) {
+                show_alert(mtm, "Launch at Login", &err);
+            }
+            with_state(|state| refresh_menu(state, mtm));
+        }
+
+        #[unsafe(method(handleToggleAutoUpdate:))]
+        fn handle_toggle_auto_update(&self, _sender: &NSMenuItem) {
+            let mtm = self.mtm();
+            with_state(|state| {
+                if let Some(updater) = state.updater.as_ref() {
+                    updater.set_automatic_checks(!updater.automatic_checks());
+                }
+                refresh_menu(state, mtm);
+            });
+        }
+
         #[unsafe(method(animTick:))]
         fn anim_tick(&self, _sender: &NSTimer) {
-            let mtm = self.mtm();
-            let frame = ANIM_FRAME.fetch_add(1, Ordering::Relaxed);
-            let dots = match frame % 4 {
-                0 => "🧹",
-                1 => "🧹 .",
-                2 => "🧹 ..",
-                _ => "🧹 ...",
-            };
-            with_state(|state| {
-                if let Some(button) = state.status_item.button(mtm) {
-                    button.setImage(None);
-                    button.setTitle(&NSString::from_str(dots));
-                }
-            });
+            tasks::tick_anim(self.mtm());
         }
 
         #[unsafe(method(autoCleanTick:))]
         fn auto_clean_tick(&self, _sender: &NSTimer) {
-            if CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed) {
-                return;
+            if !tasks::is_busy() {
+                tasks::start_scan(true);
             }
-            start_scan(true);
         }
 
         #[unsafe(method(autoScanTick:))]
         fn auto_scan_tick(&self, _sender: &NSTimer) {
-            if CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed) {
-                return;
+            if !tasks::is_busy() {
+                tasks::start_scan(false);
             }
-            start_scan(false);
         }
 
         #[unsafe(method(shineTick:))]
         fn shine_tick(&self, _sender: &NSTimer) {
-            SHINE_TIMER.with(|cell| {
-                if let Some(timer) = cell.borrow_mut().take() {
-                    timer.invalidate();
-                }
-            });
-            start_scan(false);
+            tasks::on_shine_done();
         }
 
         #[unsafe(method(scanDone:))]
         fn scan_done(&self, _sender: *mut AnyObject) {
-            let mtm = self.mtm();
-            let results = SCAN_RESULT.lock().unwrap().take();
-            if let Some(targets) = results {
-                // Show discovered targets immediately (sizes = 0, shown as "...")
-                with_state(|state| {
-                    state.targets = targets;
-                    refresh_menu(state, mtm);
-                });
-                // Kick off Phase 2: compute sizes in background
-                let mut targets_for_sizing: Vec<TargetDir> = with_state_ret(|state| {
-                    state.targets.iter().map(|t| TargetDir {
-                        path: t.path.clone(), size_bytes: 0, last_modified: t.last_modified, kind: t.kind,
-                    }).collect()
-                }).unwrap_or_default();
-                std::thread::spawn(move || {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        scan_sizes(&mut targets_for_sizing);
-                    }));
-                    *SIZES_RESULT.lock().unwrap() = Some(targets_for_sizing);
-                    unsafe {
-                        dispatch_async_f(
-                            std::ptr::addr_of!(_dispatch_main_q),
-                            std::ptr::null_mut(),
-                            sizes_done_trampoline,
-                        );
-                    }
-                });
-            } else {
-                SCANNING.store(false, Ordering::Relaxed);
-            }
+            tasks::on_scan_done(self.mtm());
         }
 
         #[unsafe(method(sizesDone:))]
         fn sizes_done(&self, _sender: *mut AnyObject) {
-            let mtm = self.mtm();
-            SCANNING.store(false, Ordering::Relaxed);
-            let results = SIZES_RESULT.lock().unwrap().take();
-            if let Some(targets) = results {
-                with_state(|state| {
-                    state.targets = targets;
-                    refresh_menu(state, mtm);
-                });
-            }
-            if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
-                let work = with_state_ret(|state| {
-                    let targets: Vec<_> = state.targets.iter()
-                        .map(|t| (t.path.clone(), t.size_bytes, t.last_modified, t.kind)).collect();
-                    let max_age = Duration::from_secs(state.config.max_age_days.saturating_mul(SECONDS_PER_DAY));
-                    (targets, max_age)
-                });
-                if let Some((targets, max_age)) = work {
-                    start_clean(move || {
-                        let tds: Vec<TargetDir> = targets.into_iter()
-                            .map(|(path, size_bytes, last_modified, kind)| TargetDir { path, size_bytes, last_modified, kind })
-                            .collect();
-                        let r = clean_old(&tds, max_age);
-                        if r.removed_count > 0 {
-                            println!("Auto Clean freed {} from {} dirs", human_size(r.freed_bytes), r.removed_count);
-                        }
-                    });
-                }
-            }
+            tasks::on_sizes_done(self.mtm());
         }
 
         #[unsafe(method(cleanDone:))]
         fn clean_done(&self, _sender: *mut AnyObject) {
-            let mtm = self.mtm();
-            stop_anim();
-            CLEANING.store(false, Ordering::Relaxed);
-            with_state(|state| {
-                if let Some(button) = state.status_item.button(mtm) {
-                    button.setImage(None);
-                    button.setTitle(&NSString::from_str("✨"));
-                }
-            });
-            HANDLER.with(|cell| {
-                if let Some(handler) = cell.borrow().as_ref() {
-                    let target: &AnyObject = unsafe {
-                        &*(handler.as_ref() as *const MenuHandler as *const AnyObject)
-                    };
-                    let timer = unsafe {
-                        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                            1.0,
-                            target,
-                            sel!(shineTick:),
-                            None,
-                            false,
-                        )
-                    };
-                    SHINE_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
-                }
-            });
+            tasks::on_clean_done(self.mtm());
         }
 
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            let app = NSApplication::sharedApplication(mtm);
-            app.terminate(None);
+            NSApplication::sharedApplication(self.mtm()).terminate(None);
         }
     }
 );
@@ -350,180 +221,14 @@ impl MenuHandler {
     }
 }
 
-/// Dispatch scan to a background thread. Set `then_clean` to chain auto-clean after scan.
-fn start_scan(then_clean: bool) {
-    let config = with_state_ret(|state| state.config.clone());
-    let Some(config) = config else { return };
-    if SCANNING.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    if then_clean {
-        POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
-    }
-    // Show scanning indicator
-    if let Some(mtm) = MainThreadMarker::new() {
-        with_state(|state| {
-            if let Some(button) = state.status_item.button(mtm) {
-                button.setImage(None);
-                button.setTitle(&NSString::from_str("🔍"));
-            }
-            let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Rust Cleaner"));
-            menu.setAutoenablesItems(false);
-            let scanning_item = unsafe {
-                NSMenuItem::initWithTitle_action_keyEquivalent(
-                    NSMenuItem::alloc(mtm),
-                    &NSString::from_str("🔍 Scanning..."),
-                    None,
-                    ns_string!(""),
-                )
-            };
-            scanning_item.setEnabled(false);
-            menu.addItem(&scanning_item);
-            state.status_item.setMenu(Some(&menu));
-        });
-    }
-    std::thread::spawn(move || {
-        let results = scan_discover(&config);
-        *SCAN_RESULT.lock().unwrap() = Some(results);
-        unsafe {
-            dispatch_async_f(
-                std::ptr::addr_of!(_dispatch_main_q),
-                std::ptr::null_mut(),
-                scan_done_trampoline,
-            );
-        }
-    });
-}
-
-extern "C" fn scan_done_trampoline(_ctx: *mut c_void) {
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let obj: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let _: () = unsafe { msg_send![obj, scanDone: std::ptr::null::<AnyObject>()] };
-        }
-    });
-}
-
-extern "C" fn sizes_done_trampoline(_ctx: *mut c_void) {
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let obj: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let _: () = unsafe { msg_send![obj, sizesDone: std::ptr::null::<AnyObject>()] };
-        }
-    });
-}
-
-fn start_clean<F: FnOnce() + Send + 'static>(work: F) {
-    if CLEANING.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    start_anim();
-    std::thread::spawn(move || {
-        let t0 = std::time::Instant::now();
-        work();
-        let elapsed = t0.elapsed();
-        if elapsed < Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_secs(2) - elapsed);
-        }
-        unsafe {
-            dispatch_async_f(
-                std::ptr::addr_of!(_dispatch_main_q),
-                std::ptr::null_mut(),
-                clean_done_trampoline,
-            );
-        }
-    });
-}
-
-extern "C" fn clean_done_trampoline(_ctx: *mut c_void) {
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let obj: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let _: () = unsafe { msg_send![obj, cleanDone: std::ptr::null::<AnyObject>()] };
-        }
-    });
-}
-
-fn start_anim() {
-    ANIM_FRAME.store(0, Ordering::Relaxed);
-    let mtm = MainThreadMarker::new().unwrap();
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str("🧹"));
-        }
-    });
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let target: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let timer = unsafe {
-                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                    0.25,
-                    target,
-                    sel!(animTick:),
-                    None,
-                    true,
-                )
-            };
-            ANIM_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
-        }
-    });
-}
-
-fn stop_anim() {
-    ANIM_TIMER.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.invalidate();
-        }
-    });
-}
-
-const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0; // 5 minutes
-
-fn start_auto_scan() {
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let target: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let timer = unsafe {
-                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                    AUTO_SCAN_INTERVAL,
-                    target,
-                    sel!(autoScanTick:),
-                    None,
-                    true,
-                )
-            };
-            SCAN_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
-        }
-    });
-}
-
-fn start_auto_clean(hours: u64) {
-    stop_auto_clean();
-    let interval = hours as f64 * 3600.0;
-    HANDLER.with(|cell| {
-        if let Some(handler) = cell.borrow().as_ref() {
-            let target: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-            let timer = unsafe {
-                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                    interval,
-                    target,
-                    sel!(autoCleanTick:),
-                    None,
-                    true,
-                )
-            };
-            AUTO_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
-        }
-    });
-}
-
-fn stop_auto_clean() {
-    AUTO_TIMER.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.invalidate();
-        }
-    });
+fn show_alert(mtm: MainThreadMarker, title: &str, body: &str) {
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(body));
+    alert.setAlertStyle(NSAlertStyle::Informational);
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    alert.runModal();
 }
 
 fn main() {
@@ -531,33 +236,32 @@ fn main() {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-    let status_bar = NSStatusBar::systemStatusBar();
-    let status_item = status_bar.statusItemWithLength(-1.0);
-    let handler = MenuHandler::new(mtm);
+    let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
     let config = Config::load();
     let auto_hours = config.auto_clean_hours;
 
-    HANDLER.with(|cell| *cell.borrow_mut() = Some(handler));
+    HANDLER.with(|cell| *cell.borrow_mut() = Some(MenuHandler::new(mtm)));
     APP_STATE.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
             config,
             targets: Vec::new(),
             status_item,
+            updater: Updater::start(),
         })
     });
 
     // Always start with a scan — zero-config, like npkill/kondo
     with_state(|state| refresh_menu(state, mtm));
-    start_scan(false);
-    start_auto_scan();
+    tasks::start_scan(false);
+    tasks::start_auto_scan();
     if auto_hours > 0 {
-        start_auto_clean(auto_hours);
+        tasks::start_auto_clean(auto_hours);
     }
 
     app.run();
 }
 
-fn with_state<F: FnOnce(&mut AppState)>(f: F) {
+pub(crate) fn with_state<F: FnOnce(&mut AppState)>(f: F) {
     APP_STATE.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut() {
             f(state);
@@ -565,13 +269,6 @@ fn with_state<F: FnOnce(&mut AppState)>(f: F) {
     });
 }
 
-fn with_state_ret<F: FnOnce(&mut AppState) -> R, R>(f: F) -> Option<R> {
+pub(crate) fn with_state_ret<F: FnOnce(&mut AppState) -> R, R>(f: F) -> Option<R> {
     APP_STATE.with(|cell| cell.borrow_mut().as_mut().map(f))
-}
-
-// libdispatch FFI — _dispatch_main_q is the actual symbol on macOS
-#[link(name = "System", kind = "dylib")]
-extern "C" {
-    static _dispatch_main_q: c_void;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }

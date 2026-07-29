@@ -1,43 +1,43 @@
-# Build and install Rust Cleaner as a macOS .app bundle.
-APP_NAME := Rust Cleaner
-BUNDLE := $(APP_NAME).app
-BINARY := rust-cleaner
+# Build and install WD-40 as a macOS .app bundle plus the wd40 CLI.
+APP_NAME := WD-40
+BUNDLE := dist/$(APP_NAME).app
 INSTALL_DIR := /Applications
-PLIST := com.wd40.rust-cleaner.plist
-LAUNCH_AGENTS_DIR := $(HOME)/Library/LaunchAgents
+CARGO_OUT := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)/release
 
-.PHONY: build bundle install uninstall autostart no-autostart clean
+.PHONY: build test bundle install uninstall cli release clean
 
 build:
 	cargo build --release
 
-bundle: build
-	rm -rf "$(BUNDLE)"
-	mkdir -p "$(BUNDLE)/Contents/MacOS" "$(BUNDLE)/Contents/Resources"
-	cp "$${CARGO_TARGET_DIR:-target}/release/$(BINARY)" "$(BUNDLE)/Contents/MacOS/"
-	cp Info.plist "$(BUNDLE)/Contents/"
-	cp AppIcon.icns "$(BUNDLE)/Contents/Resources/"
-	@echo "Built $(BUNDLE)"
+test:
+	cargo test
+
+# Produces dist/WD-40.app with Sparkle embedded and everything code-signed.
+bundle:
+	./scripts/bundle.sh
 
 install: bundle
-	rm -rf "$(INSTALL_DIR)/$(BUNDLE)"
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	cp -R "$(BUNDLE)" "$(INSTALL_DIR)/"
-	@echo "Installed to $(INSTALL_DIR)/$(BUNDLE)"
+	@echo "Installed $(INSTALL_DIR)/$(APP_NAME).app — enable Launch at Login from the Settings submenu"
 
-uninstall: no-autostart
-	rm -rf "$(INSTALL_DIR)/$(BUNDLE)"
+uninstall:
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
+	rm -f "$(HOME)/Library/LaunchAgents/com.wd40.app.plist"
+	-launchctl bootout gui/$$(id -u)/com.wd40.app 2>/dev/null
 	@echo "Uninstalled $(APP_NAME)"
 
-autostart:
-	mkdir -p "$(LAUNCH_AGENTS_DIR)"
-	cp $(PLIST) "$(LAUNCH_AGENTS_DIR)/$(PLIST)"
-	@echo "Auto-start enabled (takes effect next login)"
+# Sandbox provenance blocks execution until the copy is re-signed.
+cli: build
+	cp "$(CARGO_OUT)/wd40" "$(HOME)/.cargo/bin/wd40"
+	codesign --force --sign - "$(HOME)/.cargo/bin/wd40"
+	@echo "Installed wd40 CLI to $(HOME)/.cargo/bin"
 
-no-autostart:
-	rm -f "$(LAUNCH_AGENTS_DIR)/$(PLIST)"
-	-launchctl bootout gui/$$(id -u) $(PLIST) 2>/dev/null
-	@echo "Auto-start disabled"
+# Publishes to the Sparkle feed: make release VERSION=0.5.0 NOTES="..."
+release:
+	@test -n "$(VERSION)" || (echo "usage: make release VERSION=x.y.z [NOTES=...]" && exit 1)
+	./scripts/release.sh "$(VERSION)" "$(NOTES)"
 
 clean:
 	cargo clean
-	rm -rf "$(BUNDLE)"
+	rm -rf dist
