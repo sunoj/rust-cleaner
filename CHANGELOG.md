@@ -2,6 +2,9 @@
 
 ## [0.5.0] — 2026-07-29
 
+### Added
+- **Dedicated Settings window** (`src/settings_window.rs`, ⌘,): General (Launch at Login), Cleaning (auto-clean cadence, age threshold), Artifact Types to Scan, and Updates (auto-check + Check Now) in one panel. Artifact types had no UI before — they were config-file only. Replaces the Settings submenu so each setting has exactly one home; the informational Scan Rules submenu stays in the menu.
+
 ### Changed
 - **Renamed to WD-40**: crate `rust-cleaner` → `wd40`, app bundle `Rust Cleaner.app` → `WD-40.app`, GUI binary `rust-cleaner` → `wd40-menu`, bundle id `com.wd40.rust-cleaner` → `com.wd40.app`. The `wd40` CLI and `~/.config/wd-40/config.toml` are unchanged.
 - **Menu redesign**: rows are attributed strings laid out against shared tab stops, so name / size / usage-bar columns align; group headers carry SF Symbols and a secondary-colored count; the header shows total reclaimable space, app version, and free disk of total.
@@ -13,6 +16,11 @@
 - **`relay/`**: Cloudflare Worker + R2 that serves `appcast.xml` and signed build archives, authenticated by `UPLOAD_SECRET`.
 - **`scripts/fetch-sparkle.sh`, `scripts/bundle.sh`, `scripts/release.sh`**: fetch + cache Sparkle, build a signed `dist/WD-40.app`, and publish an EdDSA-signed release to the feed.
 - **Launch at Login toggle** (`src/autostart.rs`) that writes and bootstraps the `com.wd40.app` LaunchAgent from inside the app.
+
+### Fixed
+- **Launch at Login no longer fights the running app**: the toggle previously ran `launchctl bootstrap`, which started a *second* menu bar instance beside the running one, and `bootout`, which terminated the app mid-handler and left the plist behind so the toggle showed a stale "on". It now only writes or removes the LaunchAgent — launchd loads `~/Library/LaunchAgents` at login by itself.
+- **Release notes can no longer break the update feed**: `]]>` inside `NOTES` closed the CDATA section early and produced a malformed `appcast.xml`, which would have broken updates for every installed copy. The terminator is now split across two sections and `scripts/release.sh` refuses to upload an appcast that fails `xmllint`.
+- **`make install` removes the pre-rename install** (`Rust Cleaner.app` and its LaunchAgent), which would otherwise have left two menu bar apps starting at login.
 
 ### Removed
 - `com.wd40.rust-cleaner.plist` and the `make autostart` / `make no-autostart` targets — the in-app toggle is now the single mechanism.

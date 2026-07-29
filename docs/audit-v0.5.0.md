@@ -204,3 +204,41 @@ the audit progresses. No application source files are changed.
   source error.
 
 Overall verdict: FIX
+
+---
+
+## Resolution (applied in `fix/audit-v0.5.0`)
+
+- **Finding 1 (no upgrade cleanup) — FIXED.** `make install` now depends on a
+  `migrate-legacy` target that boots out `com.wd40.rust-cleaner`, deletes its
+  plist, and removes `/Applications/Rust Cleaner.app`. Marked in the Makefile
+  as deletable once no 0.4.x install remains, since the project forbids
+  permanent migration shims.
+
+- **Finding 2 (login-item state disagreement) — FIXED, differently than
+  suggested.** Live testing showed the `launchctl` calls were themselves the
+  defect: `bootstrap` spawned a second menu bar instance beside the running
+  app, and `bootout` then terminated the app mid-handler, leaving the plist
+  behind and the toggle stuck on. `src/autostart.rs` now only writes or removes
+  the LaunchAgent — launchd loads `~/Library/LaunchAgents` at login on its own,
+  so there is no second source of truth to disagree with. Verified by toggling
+  from the Settings window: enable creates the plist, disable removes it, the
+  app survives both, and the checkbox reflects reality.
+
+- **Finding 3 (CDATA injection in release notes) — FIXED.** `scripts/release.sh`
+  splits any `]]>` in `NOTES` across two CDATA sections and refuses to upload an
+  appcast that fails `xmllint --noout`. Verified against the exact payload from
+  the finding: previously a parse error, now well-formed with the text
+  preserved verbatim as character data.
+
+- **Finding 4 (no regression coverage) — PARTIALLY ADDRESSED, still open.**
+  Tests were added for the pure helpers only. The stateful orchestration in
+  `src/tasks.rs` and the updater failure paths remain untested: they are bound
+  to AppKit main-thread state and NSTimer scheduling, which the current design
+  cannot exercise from `cargo test`. Making them testable needs a seam that
+  does not exist yet, so this is recorded as a known gap rather than closed.
+
+- **Verification FAIL (cargo check blocked by the sandbox) — NOT A DEFECT.**
+  Independently confirmed outside the audit sandbox: `cargo build --release`
+  and `cargo test` are clean, and the audit's own retry reported `cargo check
+  -p wd40` at 0 errors and 0 warnings.

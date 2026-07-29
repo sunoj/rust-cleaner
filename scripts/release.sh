@@ -44,6 +44,10 @@ fi
 SIG_LINE="$("$SIGN_UPDATE" "$OUT_DIR/$ZIP")"
 LENGTH="$(printf '%s' "$SIG_LINE" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
 
+# A "]]>" inside the notes would close the CDATA section early and let the rest
+# of the text be parsed as markup. Split the terminator across two sections.
+NOTES_XML="${NOTES//]]>/]]]]><![CDATA[>}"
+
 cat > "$OUT_DIR/appcast.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -54,12 +58,19 @@ cat > "$OUT_DIR/appcast.xml" <<XML
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:version>$BUILD</sparkle:version>
       <sparkle:minimumSystemVersion>$MIN_OS</sparkle:minimumSystemVersion>
-      <description><![CDATA[ $NOTES ]]></description>
+      <description><![CDATA[ $NOTES_XML ]]></description>
       <enclosure url="$RELAY/$ZIP" $SIG_LINE type="application/zip" />
     </item>
   </channel>
 </rss>
 XML
+
+# Never publish a feed that Sparkle cannot parse: a broken appcast breaks
+# updates for every installed copy, and the upload is not transactional.
+if ! xmllint --noout "$OUT_DIR/appcast.xml" 2>/dev/null; then
+  printf 'ERROR: generated appcast.xml is not well-formed XML; nothing uploaded\n' >&2
+  exit 1
+fi
 
 curl -fsS -X PUT "$RELAY/$ZIP" \
   -H "authorization: Bearer $UPLOAD_SECRET" \

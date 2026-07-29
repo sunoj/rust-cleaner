@@ -61,6 +61,13 @@ impl Updater {
         }
     }
 
+    /// Same action the menu item sends, for the Settings window's button.
+    pub fn check_now(&self) {
+        unsafe {
+            let _: () = msg_send![&*self.controller, checkForUpdates: Option::<&AnyObject>::None];
+        }
+    }
+
     fn updater(&self) -> Retained<AnyObject> {
         unsafe { msg_send![&*self.controller, updater] }
     }

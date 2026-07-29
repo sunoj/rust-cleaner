@@ -15,7 +15,7 @@ A native macOS status bar utility with zero-config scanning.
 - **One-Click Clean**: Individual projects, by group, all, or old only
 - **Auto Scan**: Refreshes every 5 minutes
 - **Auto Clean**: Configurable interval (1h/6h/12h/24h) + age threshold
-- **Launch at Login**: Toggle straight from the Settings submenu
+- **Settings Window** (⌘,): Launch at Login, auto-clean cadence, age threshold, artifact types, and update preferences in one panel
 - **Auto Update**: Sparkle checks the release feed daily; `Check for Updates…` runs it on demand
 - **Two-Phase Scan**: Instant discovery, background size computation
 
@@ -61,8 +61,8 @@ make install
 make cli
 ```
 
-Enable **Launch at Login** from the app's Settings submenu; it installs the
-`com.wd40.app` LaunchAgent for the current user.
+Enable **Launch at Login** from the Settings window; it installs the
+`com.wd40.app` LaunchAgent for the current user and takes effect at next login.
 
 ## Configuration
 

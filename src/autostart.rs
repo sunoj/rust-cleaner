@@ -1,10 +1,13 @@
 // Launch-at-login control for WD-40, backed by a per-user LaunchAgent.
+// launchd loads ~/Library/LaunchAgents at login, so writing the plist is the
+// entire mechanism. Deliberately no launchctl: bootstrap would spawn a second
+// instance alongside the running app, and bootout would terminate this one
+// mid-handler, leaving the plist behind and the toggle showing a stale state.
 // Exports: `is_enabled`, `set_enabled`.
-// Deps: std, dirs, libc.
+// Deps: std, dirs.
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 const LABEL: &str = "com.wd40.app";
 
@@ -16,13 +19,12 @@ pub fn is_enabled() -> bool {
     plist_path().is_some_and(|path| path.exists())
 }
 
-/// Install or remove the LaunchAgent and load/unload it for the current session.
+/// Install or remove the LaunchAgent. Takes effect at the next login; the
+/// running instance is left alone either way.
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
     let path = plist_path().ok_or("no home directory")?;
-    let domain = format!("gui/{}", unsafe { libc::getuid() });
 
     if !enabled {
-        let _ = launchctl(&["bootout", &format!("{domain}/{LABEL}")]);
         return match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -34,20 +36,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    fs::write(&path, agent_plist(&exe.to_string_lossy())).map_err(|err| err.to_string())?;
-    let _ = launchctl(&["bootout", &format!("{domain}/{LABEL}")]);
-    launchctl(&["bootstrap", &domain, &path.to_string_lossy()])
-}
-
-fn launchctl(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("launchctl")
-        .args(args)
-        .output()
-        .map_err(|err| err.to_string())?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    fs::write(&path, agent_plist(&exe.to_string_lossy())).map_err(|err| err.to_string())
 }
 
 fn agent_plist(program: &str) -> String {
@@ -94,5 +83,12 @@ mod tests {
         let plist = agent_plist("/Applications/WD-40.app/Contents/MacOS/wd40-menu");
         assert!(plist.contains("<string>/Applications/WD-40.app/Contents/MacOS/wd40-menu</string>"));
         assert!(plist.contains("<string>com.wd40.app</string>"));
+    }
+
+    #[test]
+    fn agent_plist_is_valid_xml_for_awkward_paths() {
+        let plist = agent_plist("/Users/a&b/WD-40.app/Contents/MacOS/wd40-menu");
+        assert!(plist.contains("/Users/a&amp;b/"));
+        assert!(!plist.contains("/Users/a&b/"));
     }
 }
