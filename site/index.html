@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WD-40 — macOS Menu Bar Utility for Build Artifacts</title>
+  <meta name="description" content="Reclaim disk space from Rust target/, node_modules/, .next/, dist/, build/ and other development build artifacts. macOS menu bar utility.">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-card: #1e293b;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --rust: #f97316;
+      --node: #3b82f6;
+      --build: #22c55e;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 0;
+      line-height: 1.6;
+    }
+    .container { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
+    h2 { font-size: 1.25rem; font-weight: 600; margin: 2rem 0 1rem; color: var(--text); }
+    p { margin: 0 0 1rem; color: var(--text-muted); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .hero {
+      text-align: center;
+      padding: 3rem 0;
+    }
+    .hero .product { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+    .hero .tagline { font-size: 1.1rem; color: var(--text-muted); }
+
+    .demo {
+      background: var(--bg-card);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+      margin: 1.5rem 0;
+    }
+    .demo-group-header {
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+      margin-top: 0.5rem;
+    }
+    .demo-group-header:first-child { margin-top: 0; }
+    .demo-group-header.rust { color: var(--rust); }
+    .demo-group-header.node { color: var(--node); }
+    .demo-group-header.build { color: var(--build); }
+    .demo-group-header.disabled { color: var(--text-muted); opacity: 0.8; }
+    .demo-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.35rem 0;
+      font-size: 0.9rem;
+    }
+    .demo-row .name { min-width: 140px; color: var(--text); }
+    .demo-row .type { min-width: 100px; color: var(--text-muted); font-size: 0.85rem; }
+    .demo-row .size { min-width: 3rem; color: var(--text-muted); font-size: 0.85rem; }
+    .demo-bar { flex: 1; height: 8px; border-radius: 4px; min-width: 60px; }
+    .demo-bar.rust { background: var(--rust); }
+    .demo-bar.node { background: var(--node); }
+    .demo-bar.build { background: var(--build); }
+    .demo-sep { height: 1px; background: var(--border); margin: 0.5rem 0; }
+    .demo-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .demo-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .demo-actions button {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .demo-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .feature-card h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+    .feature-card p { font-size: 0.9rem; margin: 0; color: var(--text-muted); }
+
+    .install-steps { margin: 1.5rem 0; }
+    .install-steps ol { padding-left: 1.5rem; color: var(--text-muted); }
+    .install-steps li { margin-bottom: 0.75rem; }
+    .install-steps code {
+      display: block;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.9rem;
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+      overflow-x: auto;
+    }
+
+    .config-block {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    .config-block .path { color: var(--accent); margin-bottom: 0.5rem; }
+    .config-block pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="hero">
+      <h1 class="product">WD-40</h1>
+      <p class="tagline">Reclaim disk space from development build artifacts</p>
+    </section>
+
+    <h2>Demo</h2>
+    <div class="demo">
+      <div class="demo-group-header rust disabled">Rust — 4.2G</div>
+      <div class="demo-row">
+        <span class="name">my-project</span>
+        <span class="type">[target]</span>
+        <span class="size">2.3G</span>
+        <span class="demo-bar rust" style="width: 55%;"></span>
+      </div>
+      <div class="demo-row">
+        <span class="name">web-api</span>
+        <span class="type">[target]</span>
+        <span class="size">1.1G</span>
+        <span class="demo-bar rust" style="width: 26%;"></span>
+      </div>
+      <div class="demo-row">
+        <span class="name">cc-target-aid</span>
+        <span class="type">[cc-target]</span>
+        <span class="size">0.8G</span>
+        <span class="demo-bar rust" style="width: 19%;"></span>
+      </div>
+      <div class="demo-sep"></div>
+      <div class="demo-group-header node">Node Modules — 1.8G</div>
+      <div class="demo-row">
+        <span class="name">next-site</span>
+        <span class="type">[node_modules]</span>
+        <span class="size">1.2G</span>
+        <span class="demo-bar node" style="width: 67%;"></span>
+      </div>
+      <div class="demo-row">
+        <span class="name">dashboard</span>
+        <span class="type">[node_modules]</span>
+        <span class="size">0.6G</span>
+        <span class="demo-bar node" style="width: 33%;"></span>
+      </div>
+      <div class="demo-sep"></div>
+      <div class="demo-group-header build">Build Output — 0.9G</div>
+      <div class="demo-row">
+        <span class="name">next-site</span>
+        <span class="type">[.next]</span>
+        <span class="size">0.5G</span>
+        <span class="demo-bar build" style="width: 56%;"></span>
+      </div>
+      <div class="demo-row">
+        <span class="name">cli-tools</span>
+        <span class="type">[dist]</span>
+        <span class="size">0.4G</span>
+        <span class="demo-bar build" style="width: 44%;"></span>
+      </div>
+      <div class="demo-sep"></div>
+      <div class="demo-footer">
+        <span>8 projects · 6.9 GB total</span>
+        <div class="demo-actions">
+          <button class="primary">Clean All (6.9G)</button>
+          <button>Clean Old (&gt;7d)</button>
+          <button>Rescan</button>
+        </div>
+      </div>
+    </div>
+
+    <h2>Features</h2>
+    <div class="features">
+      <div class="feature-card">
+        <h3>Menu Bar</h3>
+        <p>Live in the macOS menu bar. One click to open, scan, and clean.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Safe by default</h3>
+        <p>Only removes well-known artifact dirs. No source or configs touched.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Age filter</h3>
+        <p>Clean only old artifacts (e.g. &gt;7 days) to keep recent builds.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Configurable roots</h3>
+        <p>Point at your dev folders; exclude paths via config.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Rusty Icon</h3>
+        <p>Status bar icon gets rustier as disk usage grows — visual pressure to clean up.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Multi-type Scanning</h3>
+        <p>Scans Rust target/, node_modules/, .next/, dist/, build/, and temp cc-target-* dirs.</p>
+      </div>
+    </div>
+
+    <h2>Install</h2>
+    <div class="install-steps">
+      <ol>
+        <li>Clone and enter the repo:
+          <code>git clone https://github.com/sunoj/wd-40 &amp;&amp; cd wd-40</code>
+        </li>
+        <li>Install the app:
+          <code>make install</code>
+        </li>
+        <li>Optional — start at login:
+          <code>make autostart</code>
+        </li>
+      </ol>
+    </div>
+
+    <h2>Config</h2>
+    <p>Config path: <code>~/.config/wd-40/config.toml</code></p>
+    <div class="config-block">
+      <div class="path">~/.config/wd-40/config.toml</div>
+      <pre>scan_dirs = ['~/Develop', '~/Projects']
+artifact_types = ['target', 'node_modules', '.next', 'dist', 'build']
+max_age_days = 7
+max_depth = 5
+auto_clean_hours = 0</pre>
+    </div>
+
+    <p style="margin-top: 2rem; font-size: 0.9rem;"><a href="https://github.com/sunoj/wd-40">GitHub</a> · v0.5.0</p>
+  </div>
+</body>
+</html>
