@@ -1,158 +1,156 @@
 #!/usr/bin/env python3
-# Generates Rust Cleaner macOS icons programmatically.
-# Exports: main() which creates AppIcon.iconset and PNG assets using Pillow.
-# Deps: Pillow for image drawing and gradient fills.
+# Generates WD-40's macOS app icon: one spray can on a squircle, nothing else.
+# Exports: main(); writes AppIcon.iconset, AppIcon.icns, docs/icon-preview.png.
+# Deps: Pillow for drawing and downsampling; iconutil to pack the .icns.
 
 from __future__ import annotations
 
+import math
+import subprocess
 from pathlib import Path
 from typing import Sequence, Tuple
 
-import json
+from PIL import Image, ImageDraw, ImageFilter
 
-from PIL import Image, ImageDraw
+RGB = Tuple[int, int, int]
 
+MASTER = 1024
+# Draw large and downsample once: cheap antialiasing without per-shape work.
+SUPERSAMPLE = 4
 ICON_SIZES: Sequence[int] = (16, 32, 128, 256, 512)
-BACKGROUND_START: Tuple[int, int, int] = (0, 75, 145)
-BACKGROUND_END: Tuple[int, int, int] = (0, 45, 100)
-CAN_BODY_COLOR: Tuple[int, int, int] = (0, 90, 170)
-CAN_OUTLINE_COLOR: Tuple[int, int, int] = (0, 50, 110)
-NOZZLE_COLOR: Tuple[int, int, int] = (200, 50, 50)
-ACCENT_COLOR: Tuple[int, int, int] = (255, 205, 0)
-ICNS_ENTRIES: Sequence[Tuple[int, int, str]] = (
-    (16, 1, "icp4"),
-    (16, 2, "ic11"),
-    (32, 1, "icp5"),
-    (32, 2, "ic12"),
-    (128, 1, "ic07"),
-    (128, 2, "ic13"),
-    (256, 1, "ic08"),
-    (256, 2, "ic14"),
-    (512, 1, "ic09"),
-    (512, 2, "ic10"),
-)
+
+# Apple's icon silhouette is a superellipse, not a rounded rectangle.
+SQUIRCLE_N = 5.0
+SQUIRCLE_INSET = 0.035
+
+BG_TOP: RGB = (86, 170, 240)
+BG_BOTTOM: RGB = (14, 74, 158)
+CAN_LIGHT: RGB = (247, 249, 252)
+CAN_SHADE: RGB = (205, 215, 230)
+BAND: RGB = (255, 199, 44)
+CAP: RGB = (222, 49, 41)
+NOZZLE: RGB = (58, 66, 80)
 
 
-def blend(color_start: Tuple[int, int, int], color_end: Tuple[int, int, int], ratio: float) -> Tuple[int, int, int]:
-    return tuple(
-        int(color_start[i] + (color_end[i] - color_start[i]) * ratio) for i in range(3)
+def superellipse(box: Tuple[float, float, float, float], n: float, steps: int = 720):
+    """Parametric superellipse points inscribed in `box`."""
+    left, top, right, bottom = box
+    center_x, center_y = (left + right) / 2.0, (top + bottom) / 2.0
+    half_w, half_h = (right - left) / 2.0, (bottom - top) / 2.0
+    exponent = 2.0 / n
+    points = []
+    for step in range(steps):
+        theta = 2.0 * math.pi * step / steps
+        x = center_x + half_w * _signed_pow(math.cos(theta), exponent)
+        y = center_y + half_h * _signed_pow(math.sin(theta), exponent)
+        points.append((x, y))
+    return points
+
+
+def _signed_pow(value: float, exponent: float) -> float:
+    magnitude = abs(value) ** exponent
+    return magnitude if value >= 0 else -magnitude
+
+
+def vertical_gradient(size: int, top: RGB, bottom: RGB) -> Image.Image:
+    column = Image.new("RGB", (1, size))
+    pixels = column.load()
+    for y in range(size):
+        ratio = y / max(size - 1, 1)
+        pixels[0, y] = tuple(
+            round(top[channel] + (bottom[channel] - top[channel]) * ratio) for channel in range(3)
+        )
+    return column.resize((size, size), Image.BILINEAR)
+
+
+def draw_can(canvas: ImageDraw.ImageDraw, size: int) -> None:
+    """One upright can: nozzle, cap, body, band. Nothing that vanishes at 16px."""
+    unit = size / 1024.0
+    body_w, body_h = 350.0 * unit, 452.0 * unit
+    left = (size - body_w) / 2.0
+    top = size * 0.415
+    radius = 48.0 * unit
+
+    cap_w, cap_h = 182.0 * unit, 108.0 * unit
+    cap_left = (size - cap_w) / 2.0
+    cap_top = top - cap_h + 14.0 * unit
+    canvas.rounded_rectangle(
+        (cap_left, cap_top, cap_left + cap_w, cap_top + cap_h), radius=28.0 * unit, fill=CAP
     )
 
+    nozzle_w, nozzle_h = 46.0 * unit, 44.0 * unit
+    nozzle_left = (size - nozzle_w) / 2.0
+    canvas.rounded_rectangle(
+        (nozzle_left, cap_top - nozzle_h + 10.0 * unit, nozzle_left + nozzle_w, cap_top + 12.0 * unit),
+        radius=15.0 * unit,
+        fill=NOZZLE,
+    )
 
-def create_background(size: int) -> Image.Image:
-    gradient = Image.new("RGBA", (1, size))
-    drawable = ImageDraw.Draw(gradient)
-    for row in range(size):
-        ratio = row / (size - 1) if size > 1 else 0.0
-        drawable.point((0, row), fill=blend(BACKGROUND_START, BACKGROUND_END, ratio) + (255,))
-    gradient = gradient.resize((size, size), resample=Image.BILINEAR)
+    body_box = (left, top, left + body_w, top + body_h)
+    canvas.rounded_rectangle(body_box, radius=radius, fill=CAN_LIGHT)
+    band_top = top + body_h * 0.40
+    canvas.rectangle((left, band_top, left + body_w, band_top + body_h * 0.24), fill=BAND)
+
+
+def apply_body_shading(can: Image.Image, size: int) -> Image.Image:
+    """Darken the right edge of the can, clipped to whatever the can already is,
+    so the shading never shows an outline of its own."""
+    unit = size / 1024.0
+    body_w = 350.0 * unit
+    left = (size - body_w) / 2.0
+
+    shade = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(shade).rectangle((left + body_w * 0.72, 0, size, size), fill=(22, 42, 72, 46))
+    shade.putalpha(Image.composite(shade.getchannel("A"), Image.new("L", (size, size), 0), can.getchannel("A")))
+    return Image.alpha_composite(can, shade)
+
+
+def render_master() -> Image.Image:
+    size = MASTER * SUPERSAMPLE
+    inset = size * SQUIRCLE_INSET
+    box = (inset, inset, size - inset, size - inset)
+
     mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size, size), radius=int(size * 0.18), fill=255)
-    background = Image.new("RGBA", (size, size))
-    background.paste(gradient, (0, 0), mask)
-    return background
+    ImageDraw.Draw(mask).polygon(superellipse(box, SQUIRCLE_N), fill=255)
 
+    background = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    background.paste(vertical_gradient(size, BG_TOP, BG_BOTTOM), (0, 0), mask)
 
-def draw_spray_can(canvas: Image.Image) -> None:
-    width = canvas.width
-    height = canvas.height
-    draw = ImageDraw.Draw(canvas)
-    body_width = int(width * 0.38)
-    body_height = int(height * 0.55)
-    body_left = (width - body_width) // 2
-    body_top = int(height * 0.3)
-    body_right = body_left + body_width
-    body_bottom = body_top + body_height
-    corner_radius = max(1, body_width // 5)
-    outline_width = max(1, width // 64)
-    draw.rounded_rectangle(
-        (body_left, body_top, body_right, body_bottom),
-        radius=corner_radius,
-        fill=CAN_BODY_COLOR,
-        outline=CAN_OUTLINE_COLOR,
-        width=outline_width,
+    # Contact shadow on its own layer, clipped to the squircle.
+    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).ellipse(
+        (size * 0.31, size * 0.845, size * 0.69, size * 0.895), fill=(6, 32, 70, 130)
     )
-    nozzle_width = max(1, width // 16)
-    nozzle_top = body_top - nozzle_width * 2
-    draw.rectangle(
-        (body_left + body_width // 5, nozzle_top, body_right - body_width // 5, body_top),
-        fill=NOZZLE_COLOR,
-    )
-    draw.rectangle(
-        (body_left + body_width // 3, nozzle_top - nozzle_width // 2, body_right - body_width // 3, nozzle_top),
-        fill=ACCENT_COLOR,
-    )
-    highlight_y = body_top + body_height // 4
-    draw.line(
-        (body_left + body_width // 4, highlight_y, body_right - body_width // 4, highlight_y),
-        fill=ACCENT_COLOR,
-        width=max(1, outline_width),
-    )
-    draw.line(
-        (body_left + body_width // 4, highlight_y + body_height // 5, body_right - body_width // 4, highlight_y + body_height // 5),
-        fill=ACCENT_COLOR,
-        width=1,
-    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(size * 0.018))
+    empty = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    icon = Image.alpha_composite(background, Image.composite(shadow, empty, mask))
 
+    can = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw_can(ImageDraw.Draw(can), size)
+    icon = Image.alpha_composite(icon, apply_body_shading(can, size))
 
-def compose_icon(size: int) -> Image.Image:
-    canvas = create_background(size)
-    draw_spray_can(canvas)
-    return canvas
-
-
-def icon_filename(size: int, scale: int) -> str:
-    suffix = "@2x" if scale == 2 else ""
-    return f"icon_{size}x{size}{suffix}.png"
-
-
-def write_contents_json(iconset_dir: Path) -> None:
-    images = []
-    for size in ICON_SIZES:
-        for scale in (1, 2):
-            images.append(
-                {
-                    "idiom": "mac",
-                    "size": f"{size}x{size}",
-                    "scale": f"{scale}x",
-                    "filename": icon_filename(size, scale),
-                }
-            )
-    data = {"images": images, "info": {"version": 1, "author": "xcode"}}
-    (iconset_dir / "Contents.json").write_text(json.dumps(data, indent=2))
-
-
-def build_icns(iconset_dir: Path, output_path: Path) -> None:
-    chunks = bytearray()
-    for size, scale, chunk_code in ICNS_ENTRIES:
-        png_path = iconset_dir / icon_filename(size, scale)
-        data = png_path.read_bytes()
-        length = 8 + len(data)
-        chunks.extend(chunk_code.encode("ascii"))
-        chunks.extend(length.to_bytes(4, "big"))
-        chunks.extend(data)
-    header = bytearray(b"icns")
-    header.extend((8 + len(chunks)).to_bytes(4, "big"))
-    output_path.write_bytes(header + chunks)
+    return icon.resize((MASTER, MASTER), Image.LANCZOS)
 
 
 def main() -> None:
     root = Path(__file__).resolve().parent.parent
-    iconset_dir = root / "AppIcon.iconset"
-    iconset_dir.mkdir(exist_ok=True)
-    for existing in iconset_dir.iterdir():
-        if existing.is_file():
-            existing.unlink()
-    for base_size in ICON_SIZES:
-        icon = compose_icon(base_size)
-        icon.save(iconset_dir / f"icon_{base_size}x{base_size}.png", format="PNG")
-        retina = compose_icon(base_size * 2)
-        retina.save(
-            iconset_dir / f"icon_{base_size}x{base_size}@2x.png",
-            format="PNG",
-        )
-    write_contents_json(iconset_dir)
-    build_icns(iconset_dir, root / "AppIcon.icns")
+    master = render_master()
+
+    docs = root / "docs"
+    docs.mkdir(exist_ok=True)
+    master.save(docs / "icon-preview.png")
+
+    iconset = root / "AppIcon.iconset"
+    iconset.mkdir(exist_ok=True)
+    for size in ICON_SIZES:
+        master.resize((size, size), Image.LANCZOS).save(iconset / f"icon_{size}x{size}.png")
+        double = size * 2
+        master.resize((double, double), Image.LANCZOS).save(iconset / f"icon_{size}x{size}@2x.png")
+
+    subprocess.run(
+        ["iconutil", "-c", "icns", str(iconset), "-o", str(root / "AppIcon.icns")], check=True
+    )
+    print(f"wrote {root / 'AppIcon.icns'} and {docs / 'icon-preview.png'}")
 
 
 if __name__ == "__main__":
