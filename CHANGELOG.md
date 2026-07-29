@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0] — 2026-07-29
+
+### Changed
+- **Renamed to WD-40**: crate `rust-cleaner` → `wd40`, app bundle `Rust Cleaner.app` → `WD-40.app`, GUI binary `rust-cleaner` → `wd40-menu`, bundle id `com.wd40.rust-cleaner` → `com.wd40.app`. The `wd40` CLI and `~/.config/wd-40/config.toml` are unchanged.
+- **Menu redesign**: rows are attributed strings laid out against shared tab stops, so name / size / usage-bar columns align; group headers carry SF Symbols and a secondary-colored count; the header shows total reclaimable space, app version, and free disk of total.
+- **Settings submenu**: auto-clean cadence, age threshold, Launch at Login, automatic update checks, and per-group Scan Rules moved out of the main menu into `Settings ▸`, with native checkmarks instead of inline `✓` text.
+- **`Rescan` is ⌘R and `Quit WD-40` is ⌘Q.**
+
+### Added
+- **Sparkle auto-update**: `Contents/Frameworks/Sparkle.framework` is loaded at runtime (`src/updater.rs`), so unbundled `cargo run` builds still start — they simply have no update menu item. Daily background checks plus an on-demand `Check for Updates…`.
+- **`relay/`**: Cloudflare Worker + R2 that serves `appcast.xml` and signed build archives, authenticated by `UPLOAD_SECRET`.
+- **`scripts/fetch-sparkle.sh`, `scripts/bundle.sh`, `scripts/release.sh`**: fetch + cache Sparkle, build a signed `dist/WD-40.app`, and publish an EdDSA-signed release to the feed.
+- **Launch at Login toggle** (`src/autostart.rs`) that writes and bootstraps the `com.wd40.app` LaunchAgent from inside the app.
+
+### Removed
+- `com.wd40.rust-cleaner.plist` and the `make autostart` / `make no-autostart` targets — the in-app toggle is now the single mechanism.
+
+
 ## [0.4.2] — 2026-04-18
 
 ### Fixed

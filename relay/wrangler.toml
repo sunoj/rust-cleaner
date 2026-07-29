@@ -1,0 +1,10 @@
+# Cloudflare Worker: serves the WD-40 Sparkle feed and signed builds from R2.
+# Uploads use a shared UPLOAD_SECRET so publishers need no Cloudflare credential.
+# Deps: R2 binding BUCKET, secret UPLOAD_SECRET.
+name = "wd40-release"
+main = "src/worker.js"
+compatibility_date = "2026-06-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "wd40-release"
