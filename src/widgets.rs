@@ -6,11 +6,11 @@ use crate::theme::Theme;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
-    NSBorderType, NSBox, NSBoxType, NSFont, NSImage, NSImageSymbolConfiguration,
-    NSImageSymbolScale, NSImageView, NSLineBreakMode, NSScrollView, NSTextAlignment, NSTextField,
-    NSView,
+    NSBorderType, NSBox, NSBoxType, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
+    NSImage, NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView, NSKernAttributeName,
+    NSLineBreakMode, NSScrollView, NSTextAlignment, NSTextField, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSNumber, NSString};
 
 pub const POPOVER_WIDTH: f64 = 380.0;
 pub const PAD_X: f64 = 16.0;
@@ -142,7 +142,25 @@ pub fn label(
     mono: bool,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
-    make_label(parent, text, x, y, w, h, size, bold, color, mono, false, mtm)
+    make_label(parent, text, x, y, w, h, size, bold, color, mono, false, None, mtm)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn label_tracked(
+    parent: &NSView,
+    text: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    size: f64,
+    bold: bool,
+    color: (f64, f64, f64),
+    mono: bool,
+    tracking: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    make_label(parent, text, x, y, w, h, size, bold, color, mono, false, Some(tracking), mtm)
 }
 
 /// Multiline label that wraps at word boundaries (footer copy, notes).
@@ -158,7 +176,7 @@ pub fn label_wrap(
     color: (f64, f64, f64),
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
-    make_label(parent, text, x, y, w, h, size, false, color, false, true, mtm)
+    make_label(parent, text, x, y, w, h, size, false, color, false, true, None, mtm)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,6 +192,7 @@ fn make_label(
     color: (f64, f64, f64),
     mono: bool,
     wrap: bool,
+    tracking: Option<f64>,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
     let field = NSTextField::initWithFrame(
@@ -194,6 +213,19 @@ fn make_label(
         NSFont::systemFontOfSize(size)
     };
     field.setFont(Some(&font));
+    if let Some(tracking) = tracking {
+        let font_obj: &objc2::runtime::AnyObject = unsafe { &*(&*font as *const NSFont as *const objc2::runtime::AnyObject) };
+        let color = Theme::color(color);
+        let color_obj: &objc2::runtime::AnyObject = unsafe { &*(&*color as *const _ as *const objc2::runtime::AnyObject) };
+        let kern = NSNumber::numberWithDouble(tracking);
+        let kern_obj: &objc2::runtime::AnyObject = unsafe { &*(&*kern as *const NSNumber as *const objc2::runtime::AnyObject) };
+        let attrs = NSDictionary::<NSString, objc2::runtime::AnyObject>::from_slices::<NSString>(
+            &[unsafe { NSForegroundColorAttributeName }, unsafe { NSFontAttributeName }, unsafe { NSKernAttributeName }],
+            &[color_obj, font_obj, kern_obj],
+        );
+        let value = unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(text), &attrs) };
+        field.setAttributedStringValue(&value);
+    }
     if wrap {
         field.setUsesSingleLineMode(false);
         field.setMaximumNumberOfLines(0);
@@ -237,5 +269,5 @@ pub fn add_size_wash(
     mtm: MainThreadMarker,
 ) {
     let w = (max_w * fraction.clamp(0.03, 1.0)).max(4.0);
-    add_fill(parent, x, y, w, h, theme.accent, 0.14, 0.0, mtm);
+    add_fill(parent, x, y, w, h, theme.accent, 0.09, 0.0, mtm);
 }

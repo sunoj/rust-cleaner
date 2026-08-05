@@ -9,10 +9,10 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSButton, NSButtonType, NSColor, NSEventModifierFlags, NSFont, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSSlider,
+    NSForegroundColorAttributeName, NSUnderlineStyleAttributeName, NSSlider,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSString,
+    MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSNumber, NSString,
 };
 
 fn attributed(text: &str, rgb: (f64, f64, f64), size: f64, bold: bool) -> Retained<NSAttributedString> {
@@ -57,6 +57,34 @@ pub fn text_button(
     button.setTag(tag);
     button.setAttributedTitle(&attributed(title, color, 12.5, false));
     parent.addSubview(&button);
+    button
+}
+
+pub fn text_button_underlined(
+    parent: &objc2_app_kit::NSView,
+    title: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    color: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let button = text_button(parent, title, x, y, w, action, target, tag, color, mtm);
+    let font = NSFont::systemFontOfSize(12.5);
+    let tint = Theme::color(color);
+    let font_obj: &AnyObject = unsafe { &*(&*font as *const NSFont as *const AnyObject) };
+    let tint_obj: &AnyObject = unsafe { &*(&*tint as *const NSColor as *const AnyObject) };
+    let underline = NSNumber::numberWithDouble(1.0);
+    let underline_obj: &AnyObject = unsafe { &*(&*underline as *const NSNumber as *const AnyObject) };
+    let attrs = NSDictionary::<NSString, AnyObject>::from_slices::<NSString>(
+        &[unsafe { NSForegroundColorAttributeName }, unsafe { NSFontAttributeName }, unsafe { NSUnderlineStyleAttributeName }],
+        &[tint_obj, font_obj, underline_obj],
+    );
+    let title = unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(title), &attrs) };
+    button.setAttributedTitle(&title);
     button
 }
 
@@ -109,6 +137,34 @@ pub fn filled_button(
     button.setAttributedTitle(&attributed(title, ink, 13.5, true));
     parent.addSubview(&button);
     button
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_button(
+    parent: &objc2_app_kit::NSView,
+    title: &str,
+    size: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    theme: &Theme,
+    mtm: MainThreadMarker,
+) {
+    add_fill(parent, x, y, w, 34.0, theme.ink, 1.0, 8.0, mtm);
+    crate::widgets::symbol_view(parent, "trash", x + 76.0, y + 10.0, 13.0, theme.surface, mtm);
+    crate::widgets::label(parent, title, x + 97.0, y + 8.0, 132.0, 18.0, 13.5, false, theme.surface, false, mtm);
+    let amount = crate::widgets::label(parent, size, x + 232.0, y + 9.0, 54.0, 16.0, 12.5, false, theme.surface, true, mtm);
+    amount.setAlphaValue(0.62);
+    let button = unsafe {
+        NSButton::buttonWithTitle_target_action(&NSString::from_str(""), Some(target), Some(action), mtm)
+    };
+    button.setBordered(false);
+    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, 34.0)));
+    button.setTag(tag);
+    parent.addSubview(&button);
 }
 
 #[allow(clippy::too_many_arguments)]

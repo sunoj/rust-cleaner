@@ -9,6 +9,7 @@ mod controls;
 mod disk_gauge;
 mod done_view;
 mod header;
+mod hover_row;
 mod icon;
 mod menu_rows;
 mod names;

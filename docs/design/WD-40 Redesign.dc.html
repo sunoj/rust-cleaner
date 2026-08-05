@@ -19,14 +19,21 @@
   .sb::-webkit-scrollbar-track { background:transparent; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:.9 } }
+  @keyframes omPop { 0% { transform:scale(.6); opacity:0 } 60% { transform:scale(1.06); opacity:1 } 100% { transform:scale(1) } }
+  @keyframes omGrow { from { transform:scaleX(.14) } to { transform:scaleX(1) } }
+  @keyframes omRise { from { opacity:0; transform:translateY(5px) } to { opacity:1; transform:none } }
+  .om-pop { animation: omPop 340ms var(--ease) both 80ms }
+  .om-grow { animation: omGrow 760ms var(--ease) both 140ms }
+  .om-rise { animation: omRise 300ms var(--ease) both 420ms }
+  @media (prefers-reduced-motion: reduce) { .om-pop, .om-grow, .om-rise { animation:none } }
 </style>
 </helmet>
 <div class="{{ themeClass }}" style="--accent:#95604A; --accent-weak:#EFE6E1; min-height:100vh; background:var(--paper); padding:44px 48px 64px; box-sizing:border-box; display:flex; flex-direction:column; gap:28px">
 
   <div style="display:flex; flex-direction:column; gap:6px">
     <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">WD-40 · menu bar · redesign</div>
-    <div style="font-size:26px; font-weight:600; letter-spacing:-.018em; color:var(--ink)">Reclaim disk from Rust build artifacts</div>
-    <div style="font-size:14px; color:var(--ink-2); max-width:62ch">Four states of the 380pt popover: what was found, cleaning, the result, and settings. Recent builds are flagged and excluded by default so nothing you are still working on disappears.</div>
+    <div style="font-size:26px; font-weight:600; letter-spacing:-.018em; color:var(--ink)">Reclaim disk from build artifacts</div>
+    <div style="font-size:14px; color:var(--ink-2); max-width:62ch">Four states of the 380pt popover: what was found, cleaning, the result, and settings. Rust targets, Xcode caches, Docker layers and node_modules are scanned as separate groups; recent builds are flagged and excluded by default so nothing you are still working on disappears.</div>
   </div>
 
   <div style="display:flex; gap:34px; align-items:flex-start; flex-wrap:wrap">
@@ -41,93 +48,81 @@
             <div style="font-size:20px; font-weight:600; letter-spacing:-.014em; color:var(--ink)">12.7 GB free</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">of 228.3 GB</div>
           </div>
-          <div style="display:flex; height:7px; border-radius:99px; overflow:hidden; background:var(--surface-2)">
-            <div style="width:79.6%; background:var(--ink-4)"></div>
+          <div style="display:flex; height:11px; border-radius:3px; overflow:hidden">
+            <div style="flex:1; background:var(--ink-4); "></div>
             <div style="width:14.8%; background:var(--accent)"></div>
-            <div style="width:5.6%; background:var(--surface-3)"></div>
+            <div style="width:5.6%; background:rgba(94,114,87,.26); box-shadow:inset 1px 0 0 rgba(94,114,87,.55)"></div>
           </div>
-          <div style="display:flex; align-items:center; justify-content:space-between">
-            <div style="display:flex; align-items:center; gap:7px">
-              <span style="width:7px; height:7px; border-radius:2px; background:var(--accent)"></span>
-              <span style="font-size:13px; color:var(--ink)">33.9 GB reclaimable</span>
+          <div style="display:grid; grid-template-columns:repeat(3, auto); justify-content:space-between; align-items:center; gap:0 10px">
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--accent)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">Reclaimable</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">82.8G</span>
             </div>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">&rarr; 46.6 GB free</div>
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--ink-4)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">In use</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">132.8G</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--pos)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">Free</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">12.7G</span>
+            </div>
           </div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">&rarr; 71.8 GB free after cleaning</div>
         </div>
 
         <div class="sb" style="max-height:392px; overflow-y:auto">
-
-          <div style="display:flex; align-items:center; gap:8px; padding:12px 16px 6px">
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">rust targets</span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-3); background:var(--surface-2); border-radius:4px; padding:1px 5px">19</span>
-            <span style="flex:1"></span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">33.9 GB</span>
-          </div>
-
-          <sc-for list="{{ rust }}" as="r" hint-placeholder-count="6">
-            <div onClick="{{ r.toggle }}" style="position:relative; display:flex; align-items:center; gap:10px; padding:7px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
-              <div style="position:absolute; left:0; top:4px; bottom:4px; background:rgba(149,96,74,.09); width:{{ r.pct }}"></div>
-              <sc-if value="{{ r.on }}" hint-placeholder-val="{{ true }}">
-                <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; background:var(--ink); display:flex; align-items:center; justify-content:center">
-                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--surface)" stroke-width="1.8" stroke-linecap="round"><path d="M1.5 5.2 L3.8 7.5 L8.5 2.5"></path></svg>
-                </div>
-              </sc-if>
-              <sc-if value="{{ r.off }}" hint-placeholder-val="{{ false }}">
-                <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; border:1px solid var(--line-2); background:var(--surface)"></div>
-              </sc-if>
-              <div style="position:relative; flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
-                <div style="font-size:13.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ r.name }}</div>
-                <div style="display:flex; align-items:center; gap:6px">
-                  <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">{{ r.meta }}</span>
-                  <sc-if value="{{ r.recent }}" hint-placeholder-val="{{ false }}">
-                    <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#9A7B43; border:1px solid rgba(154,123,67,.35); border-radius:3px; padding:0 4px">recent</span>
-                  </sc-if>
-                </div>
-              </div>
-              <div style="position:relative; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums">{{ r.size }}</div>
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; gap:8px; padding:12px 16px 6px">
+              <svg style="flex:none" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="{{ g.iconD }}"></path></svg>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">{{ g.label }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-3); background:var(--surface-2); border-radius:4px; padding:1px 5px">{{ g.count }}</span>
+              <span style="flex:1"></span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">{{ g.total }}</span>
             </div>
-          </sc-for>
-
-          <div style="padding:6px 16px 14px">
-            <span style="font-size:12.5px; color:var(--ink-2); border-bottom:1px solid var(--line-2); cursor:pointer">Show 7 smaller targets &middot; 1.4 GB</span>
-          </div>
-
-          <div style="height:1px; background:var(--line); margin:0 16px"></div>
-
-          <div style="display:flex; align-items:center; gap:8px; padding:12px 16px 6px">
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">build output</span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-3); background:var(--surface-2); border-radius:4px; padding:1px 5px">3</span>
-            <span style="flex:1"></span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">6.3 MB</span>
-          </div>
-
-          <sc-for list="{{ build }}" as="r" hint-placeholder-count="3">
-            <div onClick="{{ r.toggle }}" style="position:relative; display:flex; align-items:center; gap:10px; padding:7px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
-              <sc-if value="{{ r.on }}" hint-placeholder-val="{{ true }}">
-                <div style="flex:none; width:15px; height:15px; border-radius:4px; background:var(--ink); display:flex; align-items:center; justify-content:center">
-                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--surface)" stroke-width="1.8" stroke-linecap="round"><path d="M1.5 5.2 L3.8 7.5 L8.5 2.5"></path></svg>
+            <sc-for list="{{ g.items }}" as="r" hint-placeholder-count="4">
+              <div onClick="{{ r.toggle }}" style="position:relative; display:flex; align-items:center; gap:10px; padding:7px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+                <div style="position:absolute; left:0; top:4px; bottom:4px; background:rgba(149,96,74,.09); width:{{ r.pct }}"></div>
+                <sc-if value="{{ r.on }}" hint-placeholder-val="{{ true }}">
+                  <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; background:var(--ink); display:flex; align-items:center; justify-content:center">
+                    <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--surface)" stroke-width="1.8" stroke-linecap="round"><path d="M1.5 5.2 L3.8 7.5 L8.5 2.5"></path></svg>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ r.off }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; border:1px solid var(--line-2); background:var(--surface)"></div>
+                </sc-if>
+                <div style="position:relative; flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
+                  <div style="font-size:13.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ r.name }}</div>
+                  <div style="display:flex; align-items:center; gap:6px">
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">{{ r.meta }}</span>
+                    <sc-if value="{{ r.recent }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#9A7B43; border:1px solid rgba(154,123,67,.35); border-radius:3px; padding:0 4px">recent</span>
+                    </sc-if>
+                  </div>
                 </div>
-              </sc-if>
-              <sc-if value="{{ r.off }}" hint-placeholder-val="{{ false }}">
-                <div style="flex:none; width:15px; height:15px; border-radius:4px; border:1px solid var(--line-2); background:var(--surface)"></div>
-              </sc-if>
-              <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
-                <div style="font-size:13.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ r.name }}</div>
-                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">{{ r.meta }}</div>
+                <div style="position:relative; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums">{{ r.size }}</div>
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums">{{ r.size }}</div>
-            </div>
+            </sc-for>
+            <sc-if value="{{ g.hasMore }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:6px 16px 12px">
+                <span style="font-size:12.5px; color:var(--ink-2); border-bottom:1px solid var(--line-2); cursor:pointer">{{ g.more }}</span>
+              </div>
+            </sc-if>
+            <div style="height:1px; background:var(--line); margin:6px 16px 0"></div>
           </sc-for>
           <div style="height:10px"></div>
         </div>
+
 
         <div style="border-top:1px solid var(--line); padding:12px 16px 13px; display:flex; flex-direction:column; gap:9px; background:var(--surface)">
           <div onClick="{{ noop }}" style="display:flex; align-items:center; justify-content:center; gap:8px; height:34px; border-radius:8px; background:var(--ink); cursor:pointer" style-hover="background:#000">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--surface)" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4.5h11M6 4.5V2.8h4v1.7M4 4.5l.8 8.7h6.4l.8-8.7"></path></svg>
             <span style="font-size:13.5px; font-weight:500; color:var(--surface)">Clean {{ selCount }} selected</span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:rgba(255,255,255,.62)">{{ selSize }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--surface); opacity:.62">{{ selSize }}</span>
           </div>
-          <div style="font-size:11.5px; line-height:1.45; color:var(--ink-3)">1 recent build excluded. Removed targets rebuild on the next <span style="font-family:'IBM Plex Mono',monospace">cargo build</span>; sizes overlap where builds share APFS clones.</div>
+          <div style="font-size:11.5px; line-height:1.45; color:var(--ink-3)">2 recent builds excluded. Everything here is regenerated by your next build; sizes overlap where builds share APFS clones.</div>
           <div style="display:flex; align-items:center; gap:14px; padding-top:2px">
             <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Rescan</span>
             <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-4)">&#8984;R</span>
@@ -146,26 +141,26 @@
 
         <div style="padding:14px 16px 13px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--line)">
           <div style="display:flex; align-items:baseline; justify-content:space-between">
-            <div style="font-size:20px; font-weight:600; letter-spacing:-.014em; color:var(--ink)">27.1 GB free</div>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">6 of 14</div>
+            <div style="font-size:20px; font-weight:600; letter-spacing:-.014em; color:var(--ink)">47.3 GB free</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">10 of 22</div>
           </div>
-          <div style="display:flex; height:7px; border-radius:99px; overflow:hidden; background:var(--surface-2)">
-            <div style="width:67.3%; background:var(--ink-4)"></div>
-            <div style="width:20.8%; background:var(--accent); animation:pulse 1.6s var(--ease) infinite"></div>
-            <div style="width:11.9%; background:var(--surface-3)"></div>
+          <div style="display:flex; height:11px; border-radius:3px; overflow:hidden">
+            <div style="width:67.3%; background:var(--ink-4); "></div>
+            <div style="width:10.7%; background:var(--accent); animation:pulse 1.6s var(--ease) infinite"></div>
+            <div style="flex:1; background:rgba(94,114,87,.26); box-shadow:inset 1px 0 0 rgba(94,114,87,.55)"></div>
           </div>
           <div style="display:flex; align-items:center; justify-content:space-between">
             <div style="display:flex; align-items:center; gap:7px">
               <svg width="12" height="12" viewBox="0 0 16 16" style="animation:spin 900ms linear infinite"><circle cx="8" cy="8" r="6.4" fill="none" stroke="var(--line-2)" stroke-width="1.7"></circle><path d="M8 1.6a6.4 6.4 0 0 1 6.4 6.4" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round"></path></svg>
-              <span style="font-size:13px; color:var(--ink)">14.4 GB freed so far</span>
+              <span style="font-size:13px; color:var(--ink)">34.6 GB freed so far</span>
             </div>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">~9s left</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">~26s left</div>
           </div>
         </div>
 
         <div style="padding:11px 16px 10px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:3px">
           <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">removing</div>
-          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">&hellip;/feat-advise-inventory/target/debug/</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">&hellip;/Developer/Xcode/DerivedData/aid-web-fbqz/</div>
         </div>
 
         <div class="sb" style="max-height:392px; overflow-y:auto; padding:8px 0">
@@ -201,42 +196,62 @@
       <div style="width:380px; background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 44px rgba(28,26,22,.13); overflow:hidden; display:flex; flex-direction:column">
 
         <div style="padding:20px 16px 18px; display:flex; flex-direction:column; gap:12px; border-bottom:1px solid var(--line)">
-          <div style="display:flex; align-items:baseline; gap:8px">
-            <div style="font-size:30px; font-weight:600; letter-spacing:-.02em; color:var(--ink)">29.1 GB</div>
-            <div style="font-size:15px; color:var(--ink-2)">freed</div>
-            <span style="flex:1"></span>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">in 21s</div>
+          <div style="display:flex; align-items:center; gap:11px">
+            <div class="om-pop" style="flex:none; width:28px; height:28px; border-radius:9px; background:rgba(94,114,87,.16); display:flex; align-items:center; justify-content:center">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="var(--pos)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 8.4 L6.3 11.6 L12.8 4.8"></path></svg>
+            </div>
+            <div style="flex:1; display:flex; align-items:baseline; gap:8px">
+              <div style="font-size:30px; font-weight:600; letter-spacing:-.02em; color:var(--ink); font-variant-numeric:tabular-nums">{{ freedLabel }}</div>
+              <div style="font-size:15px; color:var(--ink-2)">freed</div>
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">in 48s</div>
           </div>
-          <div style="display:flex; height:7px; border-radius:99px; overflow:hidden; background:var(--surface-2)">
-            <div style="width:81.7%; background:var(--ink-4)"></div>
-            <div style="width:18.3%; background:var(--surface-3)"></div>
+          <div style="display:flex; height:11px; border-radius:3px; overflow:hidden">
+            <div style="width:68.6%; background:var(--ink-4)"></div>
+            <div class="om-grow" style="flex:1; background:rgba(94,114,87,.26); box-shadow:inset 1px 0 0 rgba(94,114,87,.55); transform-origin:left center"></div>
           </div>
           <div style="display:flex; align-items:baseline; justify-content:space-between">
-            <div style="font-size:13px; color:var(--ink)">41.8 GB free</div>
+            <div style="font-size:13px; color:var(--ink)">71.8 GB free</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">was 12.7 GB</div>
           </div>
         </div>
 
-        <div style="padding:6px 0 4px">
+        <div class="om-rise" style="padding:6px 0 4px">
           <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
             <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">11</span></div>
-            <div style="flex:1; font-size:13.5px; color:var(--ink)">Rust targets removed</div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">Rust targets</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">29.1 GB</div>
           </div>
           <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+            <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">4</span></div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">Xcode caches</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">18.2 GB</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+            <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">1</span></div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">Docker images</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">8.4 GB</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
             <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">3</span></div>
-            <div style="flex:1; font-size:13.5px; color:var(--ink)">Build output removed</div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">node_modules</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">3.4 GB</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+            <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">3</span></div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">Build output</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">6.3 MB</div>
           </div>
           <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
-            <div style="flex:none; width:22px; height:22px; border-radius:6px; background:rgba(154,123,67,.12); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#9A7B43">1</span></div>
-            <div style="flex:1; font-size:13.5px; color:var(--ink)">Skipped &mdash; built 2 days ago</div>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink-3)">3.1 GB</div>
+            <div style="flex:none; width:22px; height:22px; border-radius:6px; background:rgba(154,123,67,.12); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#9A7B43">2</span></div>
+            <div style="flex:1; font-size:13.5px; color:var(--ink)">Skipped &mdash; built in the last 3 days</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink-3)">19.3 GB</div>
           </div>
         </div>
 
+
         <div style="margin:6px 16px 0; padding:11px 12px; border:1px solid var(--line); border-radius:8px; background:var(--paper)">
-          <div style="font-size:12px; line-height:1.5; color:var(--ink-2)">Rebuilding all 11 targets costs roughly <span style="color:var(--ink)">18 min</span> of compile time. No crates need re-downloading &mdash; the Cargo registry cache was left untouched.</div>
+          <div style="font-size:12px; line-height:1.5; color:var(--ink-2)">Rebuilding everything costs roughly <span style="color:var(--ink)">34 min</span> of compile time. Cargo registry, pnpm store and in-use Docker layers were left untouched.</div>
         </div>
 
         <div style="border-top:1px solid var(--line); margin-top:16px; padding:12px 16px 13px; display:flex; flex-direction:column; gap:9px">
@@ -288,6 +303,19 @@
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--ink-4)" stroke-width="1.7" stroke-linecap="round"><path d="M6 3.5 L10.5 8 L6 12.5"></path></svg>
                 </div>
               </sc-if>
+            </div>
+          </sc-for>
+
+          <div style="height:1px; background:var(--line); margin:8px 16px 0"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:14px 16px 6px">what to scan</div>
+          <sc-for list="{{ typeRows }}" as="t" hint-placeholder-count="5">
+            <div onClick="{{ t.toggle }}" style="display:flex; align-items:center; gap:11px; min-height:38px; padding:8px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+              <svg style="flex:none" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.iconD }}"></path></svg>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">{{ t.label }}</div>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-3)">{{ t.size }}</span>
+              <div style="flex:none; width:38px; height:22px; border-radius:99px; padding:2px; box-sizing:border-box; background:{{ t.trackBg }}; transition:background var(--dur) var(--ease); display:flex; justify-content:{{ t.knobPos }}">
+                <div style="width:18px; height:18px; border-radius:99px; background:var(--surface); box-shadow:0 1px 2px rgba(28,26,22,.25)"></div>
+              </div>
             </div>
           </sc-for>
 
@@ -358,83 +386,105 @@
 
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light' | 'dark'&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;showSizeBars&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;selectionMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;item&quot;,&quot;group&quot;],&quot;default&quot;:&quot;item&quot;,&quot;tsType&quot;:&quot;'item' | 'group'&quot;,&quot;section&quot;:&quot;Behavior&quot;},&quot;keepDays&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:3,&quot;min&quot;:0,&quot;max&quot;:30,&quot;unit&quot;:&quot;d&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
-const RUST = [
-  ['arbdiag', 'tmp-target', 5.6, '5.6 GB', 12],
-  ['aid-qwen', 'tmp-target', 5.3, '5.3 GB', 9],
-  ['aid-cmd', 'tmp-target', 4.3, '4.3 GB', 21],
-  ['ai-dispatch/feat-advise-inventory', 'target', 3.4, '3.4 GB', 5],
-  ['ai-dispatch/feat-qwen-adapter', 'target', 3.1, '3.1 GB', 2],
-  ['ai-dispatch/fix-adapter-completion-status', 'target', 2.3, '2.3 GB', 18],
-  ['arbaudit', 'tmp-target', 2.1, '2.1 GB', 30],
-  ['713-release', 'tmp-target', 1.3, '1.3 GB', 44],
-  ['aid-advise', 'tmp-target', 1.3, '1.3 GB', 16],
-  ['713diag', 'tmp-target', 1.3, '1.3 GB', 52],
-  ['713-audit', 'tmp-target', 1.2, '1.2 GB', 52],
-  ['aid-merged', 'tmp-target', 0.97, '992.8 MB', 7],
+const ICON = {
+  rust: 'M8 1.9 L13.7 5.2 V11.4 L8 14.7 L2.3 11.4 V5.2 Z M2.3 5.2 L8 8.5 L13.7 5.2 M8 8.5 V14.7',
+  xcode: 'M2.8 13.2 L8.6 7.4 M7.2 6 L10 8.8 M9.6 2.4 L13.6 6.4 L11.8 8.2 L7.8 4.2 Z',
+  docker: 'M2.2 9.2 H5 V12 H2.2 Z M5.8 9.2 H8.6 V12 H5.8 Z M9.4 9.2 H12.2 V12 H9.4 Z M5.8 5.8 H8.6 V8.6 H5.8 Z M1.6 12.8 C4.8 14.6 11.2 14.2 14.4 10.8',
+  node: 'M8 1.9 L13.6 5.1 V11.3 L8 14.5 L2.4 11.3 V5.1 Z M6 6.2 V9.9 M6 6.2 L10 9.9 M10 6.2 V9.9',
+  build: 'M10.4 2.4 A3.2 3.2 0 1 0 13.4 7.6 L7 14 L3.6 10.6 Z',
+};
+
+const GROUPS = [
+  { key: 'rust', label: 'rust targets', icon: 'rust', count: 19, total: '33.9 GB', more: 'Show 7 smaller targets · 1.4 GB', items: [
+    ['arbdiag', 'tmp-target', 5.6, '5.6 GB', 12],
+    ['aid-qwen', 'tmp-target', 5.3, '5.3 GB', 9],
+    ['aid-cmd', 'tmp-target', 4.3, '4.3 GB', 21],
+    ['ai-dispatch/feat-advise-inventory', 'target', 3.4, '3.4 GB', 5],
+    ['ai-dispatch/feat-qwen-adapter', 'target', 3.1, '3.1 GB', 2],
+    ['ai-dispatch/fix-adapter-completion-status', 'target', 2.3, '2.3 GB', 18],
+    ['arbaudit', 'tmp-target', 2.1, '2.1 GB', 30],
+    ['713-release', 'tmp-target', 1.3, '1.3 GB', 44],
+    ['aid-advise', 'tmp-target', 1.3, '1.3 GB', 16],
+    ['713diag', 'tmp-target', 1.3, '1.3 GB', 52],
+    ['713-audit', 'tmp-target', 1.2, '1.2 GB', 52],
+    ['aid-merged', 'tmp-target', 0.97, '992.8 MB', 7],
+  ] },
+  { key: 'xcode', label: 'xcode', icon: 'xcode', count: 4, total: '18.2 GB', items: [
+    ['DerivedData', '14 projects', 11.4, '11.4 GB', 6],
+    ['iOS DeviceSupport', '9 versions', 4.1, '4.1 GB', 22],
+    ['Archives', '6 builds', 1.9, '1.9 GB', 41],
+    ['Simulator caches', 'CoreSimulator', 0.813, '832.5 MB', 9],
+  ] },
+  { key: 'docker', label: 'docker', icon: 'docker', count: 2, total: '24.6 GB', items: [
+    ['Build cache', 'buildkit', 16.2, '16.2 GB', 1],
+    ['Dangling images', '23 layers', 8.4, '8.4 GB', 15],
+  ] },
+  { key: 'node', label: 'node_modules', icon: 'node', count: 12, total: '6.1 GB', more: 'Show 9 more · 2.7 GB', items: [
+    ['aid-web', 'node_modules', 1.4, '1.4 GB', 8],
+    ['dashboard', 'node_modules', 1.1, '1.1 GB', 13],
+    ['docs-site', 'node_modules', 0.893, '914.4 MB', 26],
+  ] },
+  { key: 'build', label: 'build output', icon: 'build', count: 3, total: '6.3 MB', items: [
+    ['wd-40', 'dist', 0.0054, '5.4 MB', 4],
+    ['web', 'dist', 0.00044, '448 KB', 11],
+    ['dashboard', 'dist', 0.00042, '432 KB', 11],
+  ] },
 ];
-const BUILD = [
-  ['wd-40', 'dist', 0.0054, '5.4 MB', 4],
-  ['web', 'dist', 0.00044, '448 KB', 11],
-  ['dashboard', 'dist', 0.00042, '432 KB', 11],
-];
+
 const PROGRESS = [
   ['arbdiag', '5.6 GB', 'done'],
   ['aid-qwen', '5.3 GB', 'done'],
   ['aid-cmd', '4.3 GB', 'done'],
-  ['ai-dispatch/feat-advise-inventory', '3.4 GB', 'active'],
+  ['Dangling images', '8.4 GB', 'done'],
+  ['DerivedData', '11.4 GB', 'done'],
+  ['iOS DeviceSupport', '4.1 GB', 'active'],
+  ['ai-dispatch/feat-advise-inventory', '3.4 GB', 'pending'],
   ['ai-dispatch/fix-adapter-completion-status', '2.3 GB', 'pending'],
   ['arbaudit', '2.1 GB', 'pending'],
-  ['713-release', '1.3 GB', 'pending'],
-  ['aid-advise', '1.3 GB', 'pending'],
-  ['713diag', '1.3 GB', 'pending'],
-  ['713-audit', '1.2 GB', 'pending'],
-  ['aid-merged', '992.8 MB', 'pending'],
-  ['wd-40', '5.4 MB', 'pending'],
+  ['Archives', '1.9 GB', 'pending'],
+  ['aid-web/node_modules', '1.4 GB', 'pending'],
+  ['dashboard/node_modules', '1.1 GB', 'pending'],
+  ['Simulator caches', '812.4 MB', 'pending'],
+  ['docs-site/node_modules', '890.2 MB', 'pending'],
 ];
+
+const FREED = 59.1;
 
 class Component extends DCLogic {
   constructor(props) {
     super(props);
     const keep = props.keepDays != null ? props.keepDays : 3;
     const off = {};
-    RUST.concat(BUILD).forEach(function (r) { if (r[4] <= keep) off[r[0]] = true; });
+    GROUPS.forEach(function (g) { g.items.forEach(function (r) { if (r[4] <= keep) off[g.key + '/' + r[0]] = true; }); });
     this.state = {
       off: off,
+      freed: 0,
       scan: { wake: true, deep: false },
       safety: { confirm: true, node: false },
+      types: { rust: true, xcode: true, docker: true, node: true, build: true },
     };
   }
+
+  componentDidMount() {
+    const self = this;
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) { this.setState({ freed: FREED }); return; }
+    const t0 = performance.now(), dur = 900;
+    const step = function (t) {
+      const p = Math.min(1, (t - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      self.setState({ freed: FREED * e });
+      if (p < 1) self._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+
+  componentWillUnmount() { if (this._raf) cancelAnimationFrame(this._raf); }
 
   fmt(gb) {
     if (gb >= 1) return (Math.round(gb * 10) / 10).toFixed(1) + ' GB';
     if (gb >= 0.001) return (Math.round(gb * 1024 * 10) / 10).toFixed(1) + ' MB';
     return Math.round(gb * 1024 * 1024) + ' KB';
-  }
-
-  rows(src, keep) {
-    const self = this;
-    const max = 5.6;
-    const single = this.props.selectionMode === 'group';
-    const bars = this.props.showSizeBars !== false;
-    return src.map(function (r) {
-      const on = single ? true : !self.state.off[r[0]];
-      return {
-        name: r[0],
-        meta: r[1] + ' · ' + r[4] + 'd ago',
-        size: r[3],
-        pct: bars ? (Math.max(3, (r[2] / max) * 100)).toFixed(1) + '%' : '0%',
-        recent: r[4] <= keep,
-        on: on,
-        off: !on,
-        toggle: single ? function () {} : function () {
-          self.setState(function (s) {
-            const o = Object.assign({}, s.off);
-            if (o[r[0]]) delete o[r[0]]; else o[r[0]] = true;
-            return { off: o };
-          });
-        },
-      };
-    });
   }
 
   switchRow(group, key, label, hint) {
@@ -456,20 +506,43 @@ class Component extends DCLogic {
   }
 
   renderVals() {
+    const self = this;
     const keep = this.props.keepDays != null ? this.props.keepDays : 3;
-    const rust = this.rows(RUST, keep);
-    const build = this.rows(BUILD, keep);
-    const all = rust.concat(build);
-    const src = RUST.concat(BUILD);
-    let total = 0, count = 0;
-    all.forEach(function (r, i) { if (r.on) { total += src[i][2]; count += 1; } });
+    const single = this.props.selectionMode === 'group';
+    const bars = this.props.showSizeBars !== false;
+    let count = 0, total = 0;
+
+    const groups = GROUPS.filter(function (g) { return self.state.types[g.key]; }).map(function (g) {
+      const max = Math.max.apply(null, g.items.map(function (r) { return r[2]; }));
+      const items = g.items.map(function (r) {
+        const id = g.key + '/' + r[0];
+        const on = single ? true : !self.state.off[id];
+        if (on) { count += 1; total += r[2]; }
+        return {
+          name: r[0],
+          meta: r[1] + ' · ' + r[4] + 'd ago',
+          size: r[3],
+          pct: bars ? Math.max(3, (r[2] / max) * 100).toFixed(1) + '%' : '0%',
+          recent: r[4] <= keep,
+          on: on, off: !on,
+          toggle: single ? function () {} : function () {
+            self.setState(function (s) {
+              const o = Object.assign({}, s.off);
+              if (o[id]) delete o[id]; else o[id] = true;
+              return { off: o };
+            });
+          },
+        };
+      });
+      return { label: g.label, count: g.count, total: g.total, iconD: ICON[g.icon], hasMore: !!g.more, more: g.more || '', items: items };
+    });
 
     return {
       themeClass: this.props.theme === 'dark' ? 'dark' : '',
-      rust: rust,
-      build: build,
+      groups: groups,
       selCount: count,
       selSize: this.fmt(total),
+      freedLabel: this.fmt(this.state.freed),
       noop: function () {},
       progress: PROGRESS.map(function (p) {
         return {
@@ -481,6 +554,20 @@ class Component extends DCLogic {
       }),
       keepDaysLabel: keep + (keep === 1 ? ' day' : ' days'),
       keepPct: Math.round((keep / 30) * 100) + '%',
+      typeRows: GROUPS.map(function (g) {
+        const on = self.state.types[g.key];
+        return {
+          label: g.label === 'rust targets' ? 'Rust targets' : g.label === 'xcode' ? 'Xcode caches' : g.label === 'docker' ? 'Docker' : g.label === 'build output' ? 'Build output' : 'node_modules',
+          iconD: ICON[g.icon], size: g.total,
+          trackBg: on ? 'var(--ink)' : 'var(--surface-3)',
+          knobPos: on ? 'flex-end' : 'flex-start',
+          toggle: function () {
+            self.setState(function (s) {
+              const t = Object.assign({}, s.types); t[g.key] = !t[g.key]; return { types: t };
+            });
+          },
+        };
+      }),
       scanRows: [
         this.switchRow('scan', 'wake', 'Scan on wake', 'Quiet background pass, once a day'),
         this.switchRow('scan', 'deep', 'Follow symlinks'),
@@ -489,7 +576,7 @@ class Component extends DCLogic {
       ],
       safetyRows: [
         this.switchRow('safety', 'confirm', 'Confirm before cleaning', 'Second tap on the clean button'),
-        this.switchRow('safety', 'node', 'Include node_modules', 'Off — npm install is slower than cargo build'),
+        this.switchRow('safety', 'node', 'Keep Docker layers in use', 'Never touches images a running container needs'),
       ],
     };
   }

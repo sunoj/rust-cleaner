@@ -15,7 +15,7 @@ use crate::{MenuHandler, HANDLER};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadOnly};
-use objc2_app_kit::{NSFont, NSPopover, NSPopoverBehavior, NSView, NSViewController};
+use objc2_app_kit::{NSEventMask, NSFont, NSPopover, NSPopoverBehavior, NSView, NSViewController};
 use objc2_foundation::{ns_string, MainThreadMarker, NSPoint, NSRect, NSRectEdge, NSSize, NSString};
 use std::cell::RefCell;
 use wd40::scanner::human_size;
@@ -35,6 +35,11 @@ pub fn attach(mtm: MainThreadMarker) {
             button.setTarget(Some(target));
             button.setAction(Some(sel!(togglePopover:)));
         }
+        // Fire on mouse-down, not mouse-up. A transient popover dismisses itself
+        // the moment you press outside it — including on this button — so by
+        // mouse-up it is already closed and the toggle would just reopen it,
+        // which reads as a popover that cannot be clicked shut.
+        button.sendActionOn(NSEventMask::LeftMouseDown);
         button.setToolTip(Some(&NSString::from_str("WD-40")));
     }
     ensure_popover(mtm);

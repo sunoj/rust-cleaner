@@ -8,6 +8,7 @@ use wd40::scanner::{ArtifactGroup, TargetDir};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GroupSelection {
     Off,
@@ -38,6 +39,7 @@ pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
         .fold(0_u64, |sum, n| sum.saturating_add(n))
 }
 
+#[allow(dead_code)]
 pub fn group_selection(
     targets: &[TargetDir],
     selected: &HashSet<usize>,
