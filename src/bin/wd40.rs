@@ -11,11 +11,12 @@ const SECONDS_PER_DAY: u64 = 86_400;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("scan");
+    let rest = args.get(2..).unwrap_or(&[]);
 
     match cmd {
-        "scan" | "s" => cmd_scan(&args[2..]),
-        "clean" | "c" => cmd_clean(&args[2..]),
-        "clean-old" | "co" => cmd_clean_old(&args[2..]),
+        "scan" | "s" => cmd_scan(rest),
+        "clean" | "c" => cmd_clean(rest),
+        "clean-old" | "co" => cmd_clean_old(rest),
         "help" | "-h" | "--help" => print_help(),
         other => {
             eprintln!("Unknown command: {}", other);

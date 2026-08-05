@@ -1,28 +1,30 @@
-// Menu bar UI for WD-40: status button, grouped scan results, settings, updates.
-// Exports: `refresh_menu`, `project_name`.
-// Deps: objc2, objc2_app_kit, objc2_foundation, crate::{icon, settings, style}.
+// Menu bar UI for WD-40: status button, disk panel, grouped scan results, actions.
+// Exports: `refresh_menu`, `new_item`, `add_caption`, `add_action`.
+// Deps: objc2, objc2_app_kit, objc2_foundation, crate::{disk_panel, hover, menu_rows, style}.
 
+use crate::disk_panel::{add_disk_panel, DiskPanel};
+use crate::hover;
 use crate::icon::{rust_text_color, rusty_icon};
+use crate::menu_rows::{path_row, plan_groups, project_row, row_width, widest_label, GroupPlan};
 use crate::rules_menu::build_rules_menu;
-use crate::style::{caption_font, menu_font, symbol_image, tinted, truncate, Row};
+use crate::style::{caption_font, menu_font, symbol_image, tinted, Columns, Row};
 use crate::{AppState, HANDLER};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{sel, MainThreadOnly};
 use objc2_app_kit::{NSColor, NSFont, NSMenu, NSMenuItem};
 use objc2_foundation::{ns_string, MainThreadMarker, NSString};
-use wd40::disk::sum_bytes;
-use wd40::scanner::{human_size, sizes_may_overlap, ArtifactGroup, ArtifactKind, TargetDir};
+use wd40::scanner::{human_size, sizes_may_overlap, TargetDir};
 
+/// How many project rows the menu lists before it starts summarizing.
 const INFO_LIMIT: usize = 15;
-const MAX_BAR: usize = 8;
-const NAME_CHARS: usize = 28;
 
 pub fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
     update_status_button(state, mtm);
 
     let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("WD-40"));
     menu.setAutoenablesItems(false);
+    hover::reset();
 
     HANDLER.with(|cell| {
         let handler = cell.borrow();
@@ -31,6 +33,7 @@ pub fn refresh_menu(state: &mut AppState, mtm: MainThreadMarker) {
         build_menu(&menu, state, target, mtm);
     });
 
+    hover::attach(&menu, mtm);
     state.status_item.setMenu(Some(&menu));
 }
 
@@ -52,34 +55,36 @@ fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
 fn build_menu(menu: &NSMenu, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
     let total = state.total_size();
     let sizing = total == 0 && !state.targets.is_empty();
+    let paths: Vec<_> = state.targets.iter().map(|t| t.path.clone()).collect();
+    let overlap = sizes_may_overlap(&paths);
 
-    add_header(menu, state, total, sizing, mtm);
+    // Columns come first: the disk panel spans the width the rows below need.
+    let font = menu_font();
+    let plans = plan_groups(&state.targets, INFO_LIMIT);
+    let columns = Columns::for_name_width(widest_label(&plans, &font));
+    let width = row_width(columns, &font);
+
+    add_disk_panel(
+        menu,
+        &DiskPanel {
+            disk: state.disk_stats(),
+            reclaimable: total,
+            sizing,
+            approximate: overlap,
+        },
+        width,
+        mtm,
+    );
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    if state.targets.is_empty() {
+    if plans.is_empty() {
         add_caption(menu, "Nothing to clean \u{2014} everything is tidy", mtm);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     } else {
-        add_groups(menu, state, target, sizing, mtm);
+        add_groups(menu, &plans, &state.targets, target, sizing, columns, width, mtm);
     }
 
-    let overlap = sizes_may_overlap(&state.targets.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
-    if !sizing {
-        // Never state a flat figure when clone sharing can inflate it.
-        let label = if overlap {
-            format!("Clean All \u{2014} up to {}", human_size(total))
-        } else {
-            format!("Clean All \u{2014} {}", human_size(total))
-        };
-        add_action(menu, &label, sel!(handleCleanAll:), target, mtm);
-    }
-    if overlap && !sizing {
-        add_caption(menu, "sizes overlap where builds share APFS clones", mtm);
-    }
-    let old_label = format!("Clean Older Than {} Days", state.config.max_age_days);
-    add_action(menu, &old_label, sel!(handleCleanOld:), target, mtm);
-    let rescan = add_action(menu, "Rescan", sel!(handleRescan:), target, mtm);
-    rescan.setKeyEquivalent(ns_string!("r"));
+    add_clean_actions(menu, state, target, total, sizing, overlap, mtm);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let settings = add_action(menu, "Settings\u{2026}", sel!(openSettings:), target, mtm);
@@ -88,84 +93,77 @@ fn build_menu(menu: &NSMenu, state: &AppState, target: &AnyObject, mtm: MainThre
     rules.setSubmenu(Some(&build_rules_menu(target, mtm)));
     menu.addItem(&rules);
     add_updates_item(menu, state, mtm);
+    add_caption(menu, &format!("WD-40 v{}", crate::updater::bundle_version()), mtm);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let quit = add_action(menu, "Quit WD-40", sel!(quit:), target, mtm);
     quit.setKeyEquivalent(ns_string!("q"));
 }
 
-fn add_header(menu: &NSMenu, state: &AppState, total: u64, sizing: bool, mtm: MainThreadMarker) {
-    let mut row = Row::new();
-    row.push("WD-40", None);
-    row.tab();
-    if sizing {
-        row.push("scanning\u{2026}", Some(NSColor::secondaryLabelColor()));
-    } else {
-        row.push(&human_size(total), Some(rust_text_color(total)));
+fn add_clean_actions(
+    menu: &NSMenu,
+    state: &AppState,
+    target: &AnyObject,
+    total: u64,
+    sizing: bool,
+    overlap: bool,
+    mtm: MainThreadMarker,
+) {
+    if !sizing {
+        // Never state a flat figure when clone sharing can inflate it.
+        let label = if overlap {
+            format!("Clean All \u{2014} up to {}", human_size(total))
+        } else {
+            format!("Clean All \u{2014} {}", human_size(total))
+        };
+        add_action(menu, &label, sel!(handleCleanAll:), target, mtm);
+        if overlap {
+            add_caption(menu, "sizes overlap where builds share APFS clones", mtm);
+        }
     }
-    let item = new_item(&NSString::from_str(""), None, mtm);
-    item.setAttributedTitle(Some(&row.build(&menu_font())));
-    item.setEnabled(false);
-    menu.addItem(&item);
-
-    let mut caption = format!("v{}", crate::updater::bundle_version());
-    if let Some(disk) = state.disk_stats() {
-        caption.push_str(&format!(
-            "  \u{2022}  {} free of {}",
-            human_size(disk.free_bytes),
-            human_size(disk.total_bytes)
-        ));
-    }
-    add_caption(menu, &caption, mtm);
+    let old_label = format!("Clean Older Than {} Days", state.config.max_age_days);
+    add_action(menu, &old_label, sel!(handleCleanOld:), target, mtm);
+    let rescan = add_action(menu, "Rescan", sel!(handleRescan:), target, mtm);
+    rescan.setKeyEquivalent(ns_string!("r"));
 }
 
 fn add_groups(
     menu: &NSMenu,
-    state: &AppState,
+    plans: &[GroupPlan],
+    targets: &[TargetDir],
     target: &AnyObject,
     sizing: bool,
+    columns: Columns,
+    width: f64,
     mtm: MainThreadMarker,
 ) {
-    let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1).max(1);
-    let mut shown = 0usize;
+    let font = menu_font();
+    let max_size = targets.iter().map(|td| td.size_bytes).max().unwrap_or(1).max(1);
 
-    for &group in ArtifactGroup::ALL {
-        let items: Vec<(usize, &TargetDir)> = state
-            .targets
-            .iter()
-            .enumerate()
-            .filter(|(_, td)| td.kind.group() == group)
-            .collect();
-        if items.is_empty() {
-            continue;
-        }
+    for plan in plans {
+        add_group_header(menu, plan, sizing, columns, mtm);
 
-        let group_size = sum_bytes(items.iter().map(|(_, td)| td.size_bytes));
-        add_group_header(menu, group, items.len(), group_size, sizing, mtm);
-
-        // The kind only adds information where a group mixes kinds (target vs
-        // tmp-target); elsewhere it just repeats the header and steals width.
-        let first_kind = items[0].1.kind.label();
-        let mixed = items.iter().any(|(_, td)| td.kind.label() != first_kind);
-
-        let visible = items.len().min(INFO_LIMIT.saturating_sub(shown));
-        for &(index, td) in items.iter().take(visible) {
+        for row in &plan.rows {
             let item = new_item(&NSString::from_str(""), Some(sel!(handleCleanProject:)), mtm);
-            let row = project_row(td, max_size, sizing, mixed);
-            item.setAttributedTitle(Some(&row.build(&menu_font())));
-            item.setTag(index as isize);
+            let title = project_row(row, max_size, sizing, &font).build(&font, columns);
+            item.setAttributedTitle(Some(&title));
+            item.setTag(row.index as isize);
             unsafe { item.setTarget(Some(target)) };
             menu.addItem(&item);
-            shown += 1;
+            // A row has width for a short name; the pointer is what reveals the
+            // path it stands for.
+            let path = path_row(row.target, &font, width).build(&font, Columns::default());
+            hover::register(row.index as isize, title, path);
         }
-        if items.len() > visible {
-            add_caption(menu, &format!("{} more not shown", items.len() - visible), mtm);
+        if plan.hidden > 0 {
+            add_caption(menu, &format!("{} more not shown", plan.hidden), mtm);
         }
 
         if !sizing {
-            let label = format!("Clean {} \u{2014} {}", group.label(), human_size(group_size));
+            let label =
+                format!("Clean {} \u{2014} {}", plan.group.label(), human_size(plan.size));
             let clean = add_action(menu, &label, sel!(handleCleanGroup:), target, mtm);
-            clean.setTag(group.tag());
+            clean.setTag(plan.group.tag());
             if let Some(image) = symbol_image("trash", 13.0) {
                 clean.setImage(Some(&image));
             }
@@ -176,49 +174,25 @@ fn add_groups(
 
 fn add_group_header(
     menu: &NSMenu,
-    group: ArtifactGroup,
-    count: usize,
-    group_size: u64,
+    plan: &GroupPlan,
     sizing: bool,
+    columns: Columns,
     mtm: MainThreadMarker,
 ) {
     let mut row = Row::new();
-    row.push(group.label(), Some(NSColor::secondaryLabelColor()));
-    row.push(&format!("  {count}"), Some(NSColor::tertiaryLabelColor()));
+    row.push(plan.group.label(), Some(NSColor::secondaryLabelColor()));
+    row.push(&format!("  {}", plan.count), Some(NSColor::tertiaryLabelColor()));
     row.tab();
     if !sizing {
-        row.push(&human_size(group_size), Some(NSColor::secondaryLabelColor()));
+        row.push(&human_size(plan.size), Some(NSColor::secondaryLabelColor()));
     }
     let item = new_item(&NSString::from_str(""), None, mtm);
-    item.setAttributedTitle(Some(&row.build(&caption_font())));
+    item.setAttributedTitle(Some(&row.build(&caption_font(), columns)));
     item.setEnabled(false);
-    if let Some(image) = symbol_image(group.symbol(), 12.0) {
+    if let Some(image) = symbol_image(plan.group.symbol(), 12.0) {
         item.setImage(Some(&image));
     }
     menu.addItem(&item);
-}
-
-fn project_row(td: &TargetDir, max_size: u64, sizing: bool, show_kind: bool) -> Row {
-    let mut row = Row::new();
-    // Name and kind share one column; overflowing it would shove the size past
-    // its tab stop and wrap the bar onto a second line.
-    let kind = if show_kind { td.kind.label() } else { "" };
-    let budget = NAME_CHARS.saturating_sub(if kind.is_empty() { 0 } else { kind.chars().count() + 2 });
-    row.push(&truncate(&project_name(td), budget), None);
-    if !kind.is_empty() {
-        row.push(&format!("  {kind}"), Some(NSColor::tertiaryLabelColor()));
-    }
-    row.tab();
-    if sizing {
-        row.push("\u{2026}", Some(NSColor::tertiaryLabelColor()));
-        return row;
-    }
-    row.push(&human_size(td.size_bytes), Some(NSColor::secondaryLabelColor()));
-    row.tab();
-    let ratio = td.size_bytes as f64 / max_size as f64;
-    let filled = (ratio * MAX_BAR as f64).ceil().max(1.0) as usize;
-    row.push(&"\u{2588}".repeat(filled.min(MAX_BAR)), Some(NSColor::tertiaryLabelColor()));
-    row
 }
 
 fn add_updates_item(menu: &NSMenu, state: &AppState, mtm: MainThreadMarker) {
@@ -248,7 +222,7 @@ pub(crate) fn add_caption(menu: &NSMenu, text: &str, mtm: MainThreadMarker) {
     let mut row = Row::new();
     row.push(text, Some(NSColor::secondaryLabelColor()));
     let item = new_item(&NSString::from_str(""), None, mtm);
-    item.setAttributedTitle(Some(&row.build(&caption_font())));
+    item.setAttributedTitle(Some(&row.build(&caption_font(), Columns::default())));
     item.setEnabled(false);
     menu.addItem(&item);
 }
@@ -264,41 +238,4 @@ pub(crate) fn add_action(
     unsafe { item.setTarget(Some(target)) };
     menu.addItem(&item);
     item
-}
-
-pub fn project_name(td: &TargetDir) -> String {
-    match td.kind {
-        ArtifactKind::TmpTarget => {
-            let dir_name = td.path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
-            // Strip the cc-target- prefix when present; otherwise show as-is so
-            // names like "smart-router-target" stay recognizable.
-            dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string()
-        }
-        _ => {
-            if let Some(home) = dirs::home_dir() {
-                // Under ~/.cargo-target/<project>[/<session>]/, show path relative to the root.
-                let shared_root = home.join(".cargo-target");
-                if let Ok(rel) = td.path.strip_prefix(&shared_root) {
-                    return rel.to_string_lossy().into_owned();
-                }
-                // Under ~/.aid/worktrees/<repo>/<branch>/target, show "<repo>/<branch>".
-                let aid_root = home.join(".aid").join("worktrees");
-                if let Ok(rel) = td.path.strip_prefix(&aid_root) {
-                    if let Some(parent) = rel.parent() {
-                        let name = parent.to_string_lossy();
-                        if !name.is_empty() {
-                            return name.into_owned();
-                        }
-                    }
-                }
-            }
-            // Standard target/node_modules/.next — show the containing project dir name.
-            td.path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        }
-    }
 }

@@ -3,8 +3,12 @@
 // Deps: objc2 AppKit bindings; background work lives in `tasks`.
 mod autostart;
 mod controls;
+mod disk_panel;
+mod hover;
 mod icon;
 mod menu;
+mod menu_rows;
+mod names;
 mod rules_menu;
 mod state;
 mod settings_window;

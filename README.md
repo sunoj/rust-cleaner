@@ -11,7 +11,10 @@ WD-40 finds and cleans build artifact directories (`target/`, `node_modules/`, `
 A native macOS status bar utility with zero-config scanning.
 
 - **Visual Status**: Icon gets "rustier" as build artifacts grow
-- **Grouped Results**: Rust, Node Modules, Build Output — with aligned size columns and usage bars
+- **Disk Panel**: Free space is the headline number, over a capacity gauge that shows the artifact slice in orange and what cleaning it would leave
+- **Grouped Results**: Rust, Node Modules, Build Output — every group keeps rows of its own, with aligned size columns and usage bars
+- **Readable Names**: The name column sizes itself to the projects on screen, and same-named projects gain the directory that tells them apart
+- **Hover for the Path**: Pointing at a row swaps the short name for its full path and how stale it is
 - **One-Click Clean**: Individual projects, by group, all, or old only
 - **Auto Scan**: Refreshes every 5 minutes
 - **Auto Clean**: Configurable interval (1h/6h/12h/24h) + age threshold
