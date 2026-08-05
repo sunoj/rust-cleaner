@@ -55,6 +55,12 @@ pub fn scroll_document_view(
     );
     scroll.setDocumentView(Some(&document));
     parent.addSubview(&scroll);
+    // AppKit's origin is bottom-left, so an untouched scroll view opens showing
+    // the end of the document — the largest group scrolled off the top. Park
+    // the clip view at the top instead.
+    let content = scroll.contentView();
+    content.setBoundsOrigin(NSPoint::new(0.0, document_h.max(h) - h));
+    scroll.reflectScrolledClipView(&content);
     document
 }
 

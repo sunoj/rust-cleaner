@@ -89,7 +89,9 @@ impl ArtifactGroup {
             Self::Rust => "gearshape.2",
             Self::NodeModules => "shippingbox",
             Self::BuildOutput => "hammer",
-            Self::Caches => "externaldrive.badge.clock",
+            // externaldrive.badge.clock does not exist on every macOS the app runs on,
+            // and a missing symbol draws nothing at all.
+            Self::Caches => "clock.arrow.circlepath",
         }
     }
 
@@ -156,7 +158,7 @@ Scans for regenerable developer caches:
 \u{2022} DerivedData/ \u{2014} Xcode build cache
 \u{2022} ModuleCache.noindex/ \u{2014} Xcode module cache
 \u{2022} CoreSimulator/Devices/*/data/Library/Caches/ \u{2014} simulator caches
-\u{2022} ~/.npm, ~/.cache/pnpm, ~/.local/share/pnpm/store, ~/.cache/yarn, ~/.config/yarn
+\u{2022} ~/.npm/_cacache, pnpm and Yarn stores
 \u{2022} Homebrew cache dirs
 
 Safe to delete \u{2014} rebuilds may need network downloads.",
