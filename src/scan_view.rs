@@ -174,11 +174,13 @@ fn draw_group_header(
         ArtifactGroup::BuildOutput => "BUILD OUTPUT",
         ArtifactGroup::Caches => "CACHES",
     };
-    label_tracked(parent, title, PAD_X + 46.0, y + 7.0, 120.0, 17.0, 11.5, false, theme.ink_3, true, 0.69, mtm);
+    // Boxes centre on y + 13.5; all-caps text carries descender space it never
+    // uses, so its frame sits a point lower to land on the same optical line.
+    label_tracked(parent, title, PAD_X + 46.0, y + 4.0, 120.0, 17.0, 11.5, false, theme.ink_3, true, 0.69, mtm);
     widgets::add_fill(parent, PAD_X + 166.0, y + 5.0, 28.0, 17.0, theme.surface_2, 1.0, 4.0, mtm);
     label(parent, &count.to_string(), PAD_X + 171.0, y + 6.0, 18.0, 15.0, 10.5, false, theme.ink_3, true, mtm);
     if !sizing {
-        label_right(parent, &header::scan_size(size), PAD_X + 203.0, y + 7.0, CONTENT_WIDTH - 203.0, 17.0, 12.0, theme.ink_2, true, mtm);
+        label_right(parent, &header::scan_size(size), PAD_X + 203.0, y + 4.0, CONTENT_WIDTH - 203.0, 17.0, 12.0, theme.ink_2, true, mtm);
     }
     y_top - GROUP_H
 }
