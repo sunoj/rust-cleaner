@@ -6,8 +6,9 @@ use crate::theme::Theme;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
-    NSBox, NSBoxType, NSFont, NSLineBreakMode, NSTextAlignment, NSTextField, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSBorderType, NSBox, NSBoxType, NSFont, NSImage, NSImageSymbolConfiguration,
+    NSImageSymbolScale, NSImageView, NSLineBreakMode, NSScrollView, NSTextAlignment, NSTextField,
+    NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
@@ -15,18 +16,46 @@ pub const POPOVER_WIDTH: f64 = 380.0;
 pub const PAD_X: f64 = 16.0;
 pub const CONTENT_WIDTH: f64 = POPOVER_WIDTH - PAD_X * 2.0;
 
-pub fn root_view(height: f64, _fill: (f64, f64, f64), mtm: MainThreadMarker) -> Retained<NSView> {
-    let view = NSVisualEffectView::initWithFrame(
-        NSVisualEffectView::alloc(mtm),
+/// The panel is an opaque surface, as the mock draws it. NSVisualEffectView was
+/// tried and dropped: behind-window vibrancy let the desktop through and made
+/// the design's flat mid-greys illegible, and the material had not settled the
+/// first time the popover was shown, so it looked different before and after
+/// the first click. A plain fill renders the same every time.
+pub fn root_view(height: f64, fill: (f64, f64, f64), mtm: MainThreadMarker) -> Retained<NSView> {
+    let view = NSView::initWithFrame(
+        NSView::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(POPOVER_WIDTH, height)),
     );
-    view.setMaterial(NSVisualEffectMaterial::Popover);
-    // Blend within the window, not behind it. Behind-window vibrancy let the
-    // desktop through and the design's flat mid-greys stopped being legible on
-    // top of it — the mock's panel is an opaque surface, not a translucent one.
-    view.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-    view.setState(NSVisualEffectState::Active);
-    view.into_super()
+    add_fill(&view, 0.0, 0.0, POPOVER_WIDTH, height, fill, 1.0, 0.0, mtm);
+    view
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn scroll_document_view(
+    parent: &NSView,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    document_h: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let scroll = NSScrollView::initWithFrame(
+        NSScrollView::alloc(mtm),
+        NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)),
+    );
+    scroll.setBorderType(NSBorderType::NoBorder);
+    scroll.setHasHorizontalScroller(false);
+    scroll.setHasVerticalScroller(true);
+    scroll.setAutohidesScrollers(true);
+    scroll.setDrawsBackground(false);
+    let document = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, document_h.max(h))),
+    );
+    scroll.setDocumentView(Some(&document));
+    parent.addSubview(&scroll);
+    document
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,6 +93,33 @@ pub fn add_line(
     mtm: MainThreadMarker,
 ) {
     add_fill(parent, x, y, w, 1.0, color, 1.0, 0.0, mtm);
+}
+
+#[allow(deprecated)]
+#[allow(clippy::too_many_arguments)]
+pub fn symbol_view(
+    parent: &NSView,
+    symbol: &str,
+    x: f64,
+    y: f64,
+    size: f64,
+    color: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) {
+    let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(symbol),
+        None,
+    ) else {
+        return;
+    };
+    image.setTemplate(true);
+    let view = NSImageView::imageViewWithImage(&image, mtm);
+    view.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(size, size)));
+    view.setContentTintColor(Some(&Theme::color(color)));
+    view.setSymbolConfiguration(Some(&NSImageSymbolConfiguration::configurationWithScale(
+        NSImageSymbolScale::Medium,
+    )));
+    parent.addSubview(&view);
 }
 
 #[allow(clippy::too_many_arguments)]

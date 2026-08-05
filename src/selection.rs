@@ -1,4 +1,4 @@
-// Per-item clean selection: recent builds start unchecked, older start checked.
+// Per-item clean selection: nothing starts checked; the user opts in.
 // Exports: `default_selection`, `selected_bytes`, `is_recent`.
 // Deps: std, wd40::scanner::TargetDir.
 
@@ -24,14 +24,11 @@ pub fn is_recent(target: &TargetDir, max_age_days: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Indices that should be checked after a scan: everything except recent builds.
-pub fn default_selection(targets: &[TargetDir], max_age_days: u64) -> HashSet<usize> {
-    targets
-        .iter()
-        .enumerate()
-        .filter(|(_, td)| !is_recent(td, max_age_days))
-        .map(|(index, _)| index)
-        .collect()
+/// Nothing is checked after a scan. Deleting here is irreversible and skips the
+/// Trash, so a popover that opens already armed to delete is not a default
+/// anyone should be handed — the user opts in, per row or per group.
+pub fn default_selection(_targets: &[TargetDir], _max_age_days: u64) -> HashSet<usize> {
+    HashSet::new()
 }
 
 pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
@@ -100,11 +97,11 @@ mod tests {
     }
 
     #[test]
-    fn recent_builds_are_excluded_by_default() {
+    fn nothing_is_armed_to_delete_by_default() {
+        // Age still drives the "recent" badge, but it must not pre-arm a row:
+        // the popover opens with an empty selection whatever the ages are.
         let targets = vec![target(1), target(10)];
-        let selected = default_selection(&targets, 3);
-        assert!(!selected.contains(&0));
-        assert!(selected.contains(&1));
+        assert!(default_selection(&targets, 3).is_empty());
         assert!(is_recent(&targets[0], 3));
         assert!(!is_recent(&targets[1], 3));
     }

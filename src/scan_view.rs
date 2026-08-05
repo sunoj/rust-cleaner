@@ -31,14 +31,16 @@ const ROW_H: f64 = 40.0;
 /// Match the mock: show the largest few, offer a link for the rest.
 const VISIBLE_CAP: usize = 6;
 const FOOTER_H: f64 = 132.0;
+const MAX_HEIGHT: f64 = 540.0;
 
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
     let sizing = state.total_size() == 0 && !state.targets.is_empty();
     let paths: Vec<_> = state.targets.iter().map(|t| t.path.clone()).collect();
     let overlap = sizes_may_overlap(&paths);
     let plans = plan_groups(&state.targets, if state.show_all { usize::MAX } else { VISIBLE_CAP });
-    let list_h = measure_list(&plans).min(360.0);
-    let height = header::HEADER_HEIGHT + list_h + FOOTER_H;
+    let list_h = measure_list(&plans);
+    let body_h = (MAX_HEIGHT - header::HEADER_HEIGHT - FOOTER_H).min(list_h);
+    let height = header::HEADER_HEIGHT + body_h + FOOTER_H;
     let root = widgets::root_view(height, theme.surface, mtm);
 
     // Header shows everything found; only the clean button counts the selection.
@@ -58,7 +60,8 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
         mtm,
     );
 
-    draw_list(&root, state, &plans, sizing, height - header::HEADER_HEIGHT, theme, target, mtm);
+    let list = widgets::scroll_document_view(&root, 0.0, FOOTER_H, POPOVER_WIDTH, body_h, list_h, mtm);
+    draw_list(&list, state, &plans, sizing, list_h, theme, target, mtm);
     draw_footer(&root, state, sizing, overlap, theme, target, mtm);
     (root, height)
 }
@@ -74,7 +77,7 @@ fn draw_list(
     target: &AnyObject,
     mtm: MainThreadMarker,
 ) {
-    let list_bottom = FOOTER_H + 4.0;
+    let list_bottom = 4.0;
     let names = display_names(&state.targets);
     let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1).max(1);
     for plan in plans {
@@ -148,7 +151,7 @@ fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>]) -> f64 {
         }
         h += 8.0;
     }
-    h.min(400.0)
+    h
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -167,26 +170,21 @@ fn draw_group_header(
     let y = y_top - 24.0;
     let selection = group_selection(&state.targets, &state.selected, group);
     let group_index = ArtifactGroup::ALL.iter().position(|candidate| *candidate == group).unwrap_or(0);
-    checkbox(
-        parent, selection == GroupSelection::On, PAD_X, y - 1.0, sel!(handleToggleGroup:),
-        target, TAG_GROUP_BASE + group_index as isize, theme, mtm,
-    );
+    checkbox(parent, selection == GroupSelection::On, PAD_X, y - 1.0, sel!(handleToggleGroup:), target, TAG_GROUP_BASE + group_index as isize, theme, mtm);
     if selection == GroupSelection::Mixed {
         widgets::add_fill(parent, PAD_X + 3.0, y + 5.0, 9.0, 2.0, theme.ink, 1.0, 1.0, mtm);
     }
+    widgets::symbol_view(parent, group.symbol(), PAD_X + 23.0, y - 1.0, 14.0, theme.ink_2, mtm);
     let title = match group {
         ArtifactGroup::Rust => "rust targets",
         ArtifactGroup::NodeModules => "node modules",
         ArtifactGroup::BuildOutput => "build output",
         ArtifactGroup::Caches => "caches",
     };
-    label(parent, title, PAD_X + 26.0, y, 134.0, 14.0, 11.5, false, theme.ink_2, true, mtm);
+    label(parent, title, PAD_X + 42.0, y, 118.0, 14.0, 11.5, false, theme.ink_2, true, mtm);
     label(parent, &count.to_string(), PAD_X + 156.0, y, 30.0, 14.0, 10.5, false, theme.ink_2, true, mtm);
     if !sizing {
-        label_right(
-            parent, &human_size(size), PAD_X + 180.0, y, CONTENT_WIDTH - 180.0, 14.0, 12.0,
-            theme.ink, true, mtm,
-        );
+        label_right(parent, &human_size(size), PAD_X + 180.0, y, CONTENT_WIDTH - 180.0, 14.0, 12.0, theme.ink, true, mtm);
     }
     y_top - 28.0
 }
@@ -220,16 +218,9 @@ fn draw_row(
         format!("{} \u{00b7} {}", td.kind.label(), age_short(td.last_modified))
     };
     label(parent, &meta, PAD_X + 26.0, y + 4.0, 180.0, 14.0, 11.0, false, theme.ink_3, true, mtm);
-    if is_recent(td, max_age_days) {
-        label(
-            parent, "recent", PAD_X + 210.0, y + 4.0, 50.0, 14.0, 10.0, false, theme.warn, true, mtm,
-        );
-    }
+    if is_recent(td, max_age_days) { label(parent, "recent", PAD_X + 210.0, y + 4.0, 50.0, 14.0, 10.0, false, theme.warn, true, mtm); }
     let size_text = if sizing { "\u{2026}".into() } else { human_size(td.size_bytes) };
-    label_right(
-        parent, &size_text, PAD_X + 250.0, y + 12.0, CONTENT_WIDTH - 250.0, 16.0, 13.0,
-        theme.ink, true, mtm,
-    );
+    label_right(parent, &size_text, PAD_X + 250.0, y + 12.0, CONTENT_WIDTH - 250.0, 16.0, 13.0, theme.ink, true, mtm);
     y
 }
 
@@ -244,20 +235,12 @@ fn draw_footer(
 ) {
     add_line(parent, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
     let (title, fill, ink) = clean_cta(state, sizing, theme);
-    filled_button(
-        parent, &title, PAD_X, 78.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN,
-        fill, ink, mtm,
-    );
+    label(parent, &format!("{} selected \u{00b7} {}", state.selected.len(), human_size(state.selected_size())), PAD_X, 116.0, CONTENT_WIDTH, 12.0, 10.5, false, theme.ink_2, true, mtm);
+    filled_button(parent, &title, PAD_X, 78.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN, fill, ink, mtm);
     label_wrap(parent, &footer_note(state, overlap), PAD_X, 26.0, CONTENT_WIDTH, 48.0, 11.0, theme.ink_2, mtm);
-    let rescan = text_button_hint(
-        parent, "Rescan", "\u{2318}R", PAD_X, 4.0, sel!(handleRescan:), target, TAG_RESCAN,
-        theme.ink, theme.ink_3, mtm,
-    );
+    let rescan = text_button_hint(parent, "Rescan", "\u{2318}R", PAD_X, 4.0, sel!(handleRescan:), target, TAG_RESCAN, theme.ink, theme.ink_3, mtm);
     set_cmd_key(&rescan, "r");
-    let settings = text_button_hint(
-        parent, "Settings", "\u{2318},", POPOVER_WIDTH - PAD_X - 96.0, 4.0,
-        sel!(openSettings:), target, TAG_SETTINGS, theme.ink, theme.ink_3, mtm,
-    );
+    let settings = text_button_hint(parent, "Settings", "\u{2318},", POPOVER_WIDTH - PAD_X - 96.0, 4.0, sel!(openSettings:), target, TAG_SETTINGS, theme.ink, theme.ink_3, mtm);
     set_cmd_key(&settings, ",");
 }
 
@@ -289,11 +272,11 @@ fn footer_note(state: &AppState, overlap: bool) -> String {
         .count();
     let mut note = if recent > 0 {
         format!(
-            "{recent} recent build{} start unchecked. ",
-            if recent == 1 { "" } else { "s" }
+            "Nothing is selected until you tick it; {recent} recent build{} flagged. ",
+            if recent == 1 { " is" } else { "s are" }
         )
     } else {
-        String::new()
+        "Nothing is selected until you tick it. ".to_string()
     };
     note.push_str("Ticked rows are cleaned; caches may need network downloads to rebuild");
     if overlap {
