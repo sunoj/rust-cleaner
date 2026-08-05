@@ -65,6 +65,18 @@ pub fn age(modified: SystemTime) -> String {
     }
 }
 
+/// Compact age for popover meta lines (`3d ago`).
+pub fn age_short(modified: SystemTime) -> String {
+    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
+        return "now".to_string();
+    };
+    match elapsed.as_secs() / SECONDS_PER_DAY {
+        0 => "today".to_string(),
+        1 => "1d ago".to_string(),
+        days => format!("{days}d ago"),
+    }
+}
+
 pub fn project_name(td: &TargetDir) -> String {
     match td.kind {
         ArtifactKind::TmpTarget => {

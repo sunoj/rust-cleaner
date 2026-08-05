@@ -1,47 +1,45 @@
-// Background scan/clean orchestration for the WD-40 menu bar app.
-// Exports: scan/clean spawners, timer control, and main-thread completion hooks.
-// Deps: objc2, libdispatch FFI, crate::{menu, with_state}.
+// Background scan/clean orchestration for the WD-40 popover app.
+// Exports: scan/clean spawners, timer control, main-thread completion hooks.
+// Deps: objc2, libdispatch FFI, crate::{names, popover, state, tasks_clean}.
 
-use crate::menu::{add_caption, refresh_menu};
-use crate::{with_state, with_state_ret, MenuHandler, HANDLER};
+use crate::names::display_names;
+use crate::tasks_clean;
+use crate::popover;
+use crate::state::{
+    with_state, with_state_ret, CleanItem, CleanItemStatus, CleanProgress, DoneSummary, UiScreen,
+};
+use crate::{MenuHandler, HANDLER};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, sel, MainThreadOnly};
-use objc2_app_kit::NSMenu;
-use objc2_foundation::{ns_string, MainThreadMarker, NSString, NSTimer};
+use objc2::{msg_send, sel};
+use objc2_foundation::{MainThreadMarker, NSTimer};
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
-use wd40::cleaner::{clean_all, clean_old};
 use wd40::disk::disk_space;
-use wd40::scanner::{human_size, scan_discover, scan_sizes, TargetDir};
+use wd40::scanner::{scan_discover, scan_sizes, TargetDir};
 
-/// How often the app rescans on its own, in seconds.
 const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
-/// Minimum time the sweeping animation stays visible, so it reads as work done.
-const MIN_CLEAN_ANIMATION: Duration = Duration::from_secs(2);
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
 static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
-static ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
+static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static SIZES_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
+static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
+static PROGRESS: Mutex<Option<CleanProgress>> = Mutex::new(None);
 
 thread_local! {
-    static ANIM_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
     static AUTO_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
     static SCAN_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
-    static SHINE_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub fn is_busy() -> bool {
     CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed)
 }
 
-/// Dispatch discovery to a background thread. `then_clean` chains auto-clean after sizing.
 pub fn start_scan(then_clean: bool) {
     let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
     if SCANNING.swap(true, Ordering::Relaxed) {
@@ -51,7 +49,12 @@ pub fn start_scan(then_clean: bool) {
         POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
     }
     if let Some(mtm) = MainThreadMarker::new() {
-        show_scanning_menu(mtm);
+        with_state(|state| {
+            if state.screen == UiScreen::Done {
+                state.screen = UiScreen::Scan;
+            }
+        });
+        popover::refresh(mtm);
     }
     std::thread::spawn(move || {
         *SCAN_RESULT.lock().unwrap() = Some(scan_discover(&config));
@@ -59,20 +62,6 @@ pub fn start_scan(then_clean: bool) {
     });
 }
 
-fn show_scanning_menu(mtm: MainThreadMarker) {
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str("\u{1f50d}"));
-        }
-        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("WD-40"));
-        menu.setAutoenablesItems(false);
-        add_caption(&menu, "Scanning\u{2026}", mtm);
-        state.status_item.setMenu(Some(&menu));
-    });
-}
-
-/// Phase 1 finished: show the discovered paths, then size them in the background.
 pub fn on_scan_done(mtm: MainThreadMarker) {
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
@@ -80,14 +69,11 @@ pub fn on_scan_done(mtm: MainThreadMarker) {
     };
     with_state(|state| {
         state.targets = targets;
-        refresh_menu(state, mtm);
+        state.reset_selection();
     });
+    popover::refresh(mtm);
     let mut pending: Vec<TargetDir> = with_state_ret(|state| {
-        state
-            .targets
-            .iter()
-            .map(|td| TargetDir { size_bytes: 0, ..td.clone() })
-            .collect()
+        state.targets.iter().map(|td| TargetDir { size_bytes: 0, ..td.clone() }).collect()
     })
     .unwrap_or_default();
     std::thread::spawn(move || {
@@ -97,123 +83,114 @@ pub fn on_scan_done(mtm: MainThreadMarker) {
     });
 }
 
-/// Phase 2 finished: publish sizes and run the queued auto-clean, if any.
 pub fn on_sizes_done(mtm: MainThreadMarker) {
     SCANNING.store(false, Ordering::Relaxed);
     if let Some(targets) = SIZES_RESULT.lock().unwrap().take() {
         with_state(|state| {
             state.targets = targets;
-            refresh_menu(state, mtm);
+            state.reset_selection();
         });
+        popover::refresh(mtm);
     }
-    if !POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
+    crate::screenshot::maybe_start(mtm);
+    if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
+        spawn_clean_selected();
+    }
+}
+
+/// Clean exactly the checked items. Irreversible; nothing else is touched.
+pub fn spawn_clean_selected() {
+    let Some(work) = with_state_ret(|state| {
+        let names = display_names(&state.targets);
+        let items: Vec<(usize, TargetDir, String)> = state
+            .selected
+            .iter()
+            .copied()
+            .filter_map(|i| state.targets.get(i).map(|td| (i, td.clone(), names[i].clone())))
+            .collect();
+        let skipped_count = state.targets.len().saturating_sub(items.len());
+        let skipped_bytes = state
+            .targets
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !state.selected.contains(i))
+            .map(|(_, td)| td.size_bytes)
+            .fold(0_u64, |a, b| a.saturating_add(b));
+        (items, skipped_count, skipped_bytes, state.reference_path())
+    }) else {
+        return;
+    };
+    let (items, skipped_count, skipped_bytes, reference) = work;
+    if items.is_empty() || CLEANING.swap(true, Ordering::Relaxed) {
         return;
     }
-    if let Some((targets, max_age)) = with_state_ret(|state| (state.targets.clone(), state.max_age())) {
-        spawn_clean_old(targets, max_age, "Auto Clean");
+    STOP_AFTER.store(false, Ordering::Relaxed);
+    let before = reference.as_deref().and_then(disk_space);
+    let progress = CleanProgress {
+        items: items
+            .iter()
+            .map(|(index, td, name)| CleanItem {
+                index: *index,
+                name: name.clone(),
+                size_bytes: td.size_bytes,
+                status: CleanItemStatus::Pending,
+            })
+            .collect(),
+        freed_so_far: 0,
+        current_path: String::new(),
+        done_count: 0,
+        total_count: items.len(),
+    };
+    *PROGRESS.lock().unwrap() = Some(progress.clone());
+    with_state(|state| {
+        state.screen = UiScreen::Cleaning;
+        state.cleaning = Some(progress.clone());
+        state.done = None;
+    });
+    if let Some(mtm) = MainThreadMarker::new() {
+        popover::refresh(mtm);
     }
-}
 
-pub fn spawn_clean_all(targets: Vec<TargetDir>, label: &'static str) {
-    start_clean(move || {
-        let result = clean_all(&targets);
-        if result.removed_count > 0 {
-            println!("{label} freed {} from {} dirs", human_size(result.freed_bytes), result.removed_count);
-        }
-    });
-}
-
-pub fn spawn_clean_old(targets: Vec<TargetDir>, max_age: Duration, label: &'static str) {
-    start_clean(move || {
-        let result = clean_old(&targets, max_age);
-        if result.removed_count > 0 {
-            println!("{label} freed {} from {} dirs", human_size(result.freed_bytes), result.removed_count);
-        }
-    });
-}
-
-pub fn spawn_remove(path: std::path::PathBuf, size: u64) {
-    start_clean(move || match std::fs::remove_dir_all(&path) {
-        Ok(()) => println!("Cleaned {} ({})", path.display(), human_size(size)),
-        Err(err) => eprintln!("Failed {}: {}", path.display(), err),
-    });
-}
-
-fn start_clean<F: FnOnce() + Send + 'static>(work: F) {
-    if CLEANING.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    start_anim();
-    // Summed target sizes overstate what a delete returns whenever APFS clones
-    // share blocks between targets, so measure the volume instead of trusting
-    // the arithmetic. See docs/apfs-clone-overcount.md.
-    let reference = with_state_ret(|state| state.reference_path()).flatten();
-    let before = reference.as_deref().and_then(disk_space).map(|d| d.free_bytes);
     std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        work();
-        if let Some(remaining) = MIN_CLEAN_ANIMATION.checked_sub(started.elapsed()) {
-            std::thread::sleep(remaining);
-        }
-        report_reclaimed(before, reference.as_deref());
+        let summary = tasks_clean::run_clean(
+            items,
+            skipped_count,
+            skipped_bytes,
+            reference,
+            before,
+            progress,
+            |p| {
+                *PROGRESS.lock().unwrap() = Some(p.clone());
+                dispatch_to_main(progress_trampoline);
+            },
+            &STOP_AFTER,
+        );
+        *DONE_RESULT.lock().unwrap() = Some(summary);
         dispatch_to_main(clean_done_trampoline);
     });
 }
 
-/// Print what the volume actually gave back, which is the only figure that
-/// survives clone sharing.
-fn report_reclaimed(before: Option<u64>, reference: Option<&std::path::Path>) {
-    let (Some(before), Some(reference)) = (before, reference) else { return };
-    let Some(after) = disk_space(reference).map(|d| d.free_bytes) else { return };
-    let reclaimed = after.saturating_sub(before);
-    println!("Reclaimed {} of disk space", human_size(reclaimed));
+pub fn on_progress(mtm: MainThreadMarker) {
+    let snapshot = PROGRESS.lock().unwrap().clone();
+    with_state(|state| state.cleaning = snapshot);
+    popover::refresh(mtm);
 }
 
-/// Clean finished: show the sparkle, then rescan a second later.
+pub fn request_stop() {
+    STOP_AFTER.store(true, Ordering::Relaxed);
+}
+
 pub fn on_clean_done(mtm: MainThreadMarker) {
-    stop_timer(&ANIM_TIMER);
     CLEANING.store(false, Ordering::Relaxed);
+    let summary = DONE_RESULT.lock().unwrap().take();
+    *PROGRESS.lock().unwrap() = None;
     with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str("\u{2728}"));
-        }
+        state.cleaning = None;
+        state.done = summary;
+        state.screen = UiScreen::Done;
     });
-    schedule(&SHINE_TIMER, 1.0, sel!(shineTick:), false);
-}
-
-pub fn on_shine_done() {
-    stop_timer(&SHINE_TIMER);
-    start_scan(false);
-}
-
-pub fn tick_anim(mtm: MainThreadMarker) {
-    let frame = ANIM_FRAME.fetch_add(1, Ordering::Relaxed);
-    let dots = match frame % 4 {
-        0 => "\u{1f9f9}",
-        1 => "\u{1f9f9} .",
-        2 => "\u{1f9f9} ..",
-        _ => "\u{1f9f9} ...",
-    };
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str(dots));
-        }
-    });
-}
-
-fn start_anim() {
-    ANIM_FRAME.store(0, Ordering::Relaxed);
-    if let Some(mtm) = MainThreadMarker::new() {
-        with_state(|state| {
-            if let Some(button) = state.status_item.button(mtm) {
-                button.setImage(None);
-                button.setTitle(&NSString::from_str("\u{1f9f9}"));
-            }
-        });
-    }
-    schedule(&ANIM_TIMER, 0.25, sel!(animTick:), true);
+    popover::refresh(mtm);
+    crate::screenshot::on_clean_finished(mtm);
 }
 
 pub fn start_auto_scan() {
@@ -275,8 +252,8 @@ macro_rules! trampoline {
 trampoline!(scan_done_trampoline, scanDone);
 trampoline!(sizes_done_trampoline, sizesDone);
 trampoline!(clean_done_trampoline, cleanDone);
+trampoline!(progress_trampoline, cleanProgress);
 
-// libdispatch FFI — _dispatch_main_q is the actual symbol on macOS
 #[link(name = "System", kind = "dylib")]
 extern "C" {
     static _dispatch_main_q: c_void;

@@ -1,30 +1,23 @@
-// Project rows for the WD-40 menu: grouping, row layout, and the hover path row.
-// Exports: `GroupPlan`, `RowPlan`, `plan_groups`, `widest_label`, `project_row`, `path_row`.
-// Deps: objc2_app_kit, crate::{names, style}, wd40::{disk, scanner}.
+// Group planning for popover scan lists: which rows fit within a visible budget.
+// Exports: `GroupPlan`, `RowPlan`, `plan_groups`. Pure — no AppKit.
+// Deps: crate::names, wd40::{disk, scanner}.
 
-use crate::names::{age, display_names, display_path};
-use crate::style::{fit_width, text_width, Columns, Row, MAX_NAME_WIDTH};
-use objc2_app_kit::{NSColor, NSFont};
+use crate::names::display_names;
 use wd40::disk::sum_bytes;
-use wd40::scanner::{human_size, ArtifactGroup, TargetDir};
+use wd40::scanner::{ArtifactGroup, TargetDir};
 
-/// Blocks in a project's relative-size bar.
-const MAX_BAR: usize = 8;
-/// Rows a non-empty group keeps even when the menu is over budget, so a small
-/// group is never reduced to a header and "3 more not shown".
+/// Rows a non-empty group keeps even when the list is over budget.
 const FLOOR_PER_GROUP: usize = 3;
 
-/// One project row, resolved down to what the menu draws.
+/// One project row, resolved down to what the popover draws.
 pub struct RowPlan<'a> {
-    /// Index into `AppState::targets`, carried as the menu item's tag.
     pub index: usize,
     pub target: &'a TargetDir,
     pub name: String,
-    /// Kind suffix; empty unless the group mixes kinds.
     pub kind: &'static str,
 }
 
-/// One artifact group and the rows the menu has room to show for it.
+/// One artifact group and the rows the popover has room to show for it.
 pub struct GroupPlan<'a> {
     pub group: ArtifactGroup,
     pub rows: Vec<RowPlan<'a>>,
@@ -34,7 +27,6 @@ pub struct GroupPlan<'a> {
 }
 
 /// Split `targets` into groups and decide which rows fit within `limit`.
-/// Pure enough to test: no AppKit, no measurement.
 pub fn plan_groups(targets: &[TargetDir], limit: usize) -> Vec<GroupPlan<'_>> {
     let names = display_names(targets);
     let members: Vec<(ArtifactGroup, Vec<(usize, &TargetDir)>)> = ArtifactGroup::ALL
@@ -56,8 +48,6 @@ pub fn plan_groups(targets: &[TargetDir], limit: usize) -> Vec<GroupPlan<'_>> {
         .into_iter()
         .zip(quota)
         .map(|((group, found), visible)| {
-            // The kind only adds information where a group mixes kinds (target
-            // vs tmp-target); elsewhere it repeats the header and steals width.
             let first_kind = found[0].1.kind.label();
             let mixed = found.iter().any(|(_, td)| td.kind.label() != first_kind);
             let rows: Vec<RowPlan> = found
@@ -81,12 +71,9 @@ pub fn plan_groups(targets: &[TargetDir], limit: usize) -> Vec<GroupPlan<'_>> {
         .collect()
 }
 
-/// Hand out `limit` rows across groups: a floor for each group first, then the
-/// remainder in order, so the biggest group cannot crowd the others out.
 fn allocate(sizes: &[usize], limit: usize) -> Vec<usize> {
     let mut quota: Vec<usize> = sizes.iter().map(|&n| n.min(FLOOR_PER_GROUP)).collect();
     let mut spent: usize = quota.iter().sum();
-    // The floors alone can exceed a small limit; give back from the last group.
     while spent > limit {
         let Some(slot) = quota.iter_mut().rev().find(|left| **left > 0) else { break };
         *slot -= 1;
@@ -98,71 +85,6 @@ fn allocate(sizes: &[usize], limit: usize) -> Vec<usize> {
         spent += extra;
     }
     quota
-}
-
-/// Widest label the menu will draw, in points — what the name column sizes to.
-pub fn widest_label(plans: &[GroupPlan], font: &NSFont) -> f64 {
-    plans
-        .iter()
-        .flat_map(|plan| plan.rows.iter())
-        .map(|row| text_width(&row.name, font) + kind_width(row, font))
-        .fold(0.0_f64, f64::max)
-}
-
-/// Width of a full project row, in points — what the disk gauge spans so the
-/// two halves of the menu share one right edge.
-pub fn row_width(columns: Columns, font: &NSFont) -> f64 {
-    columns.bar_start() + text_width(&"\u{2588}".repeat(MAX_BAR), font)
-}
-
-pub fn project_row(row: &RowPlan, max_size: u64, sizing: bool, font: &NSFont) -> Row {
-    let mut out = Row::new();
-    // Name and kind share one column; overflowing it would shove the size past
-    // its tab stop and wrap the bar onto a second line.
-    let budget = MAX_NAME_WIDTH - kind_width(row, font);
-    out.push(&fit_width(&row.name, font, budget), None);
-    if !row.kind.is_empty() {
-        out.push(&format!("  {}", row.kind), Some(NSColor::tertiaryLabelColor()));
-    }
-    out.tab();
-    if sizing {
-        out.push("\u{2026}", Some(NSColor::tertiaryLabelColor()));
-        return out;
-    }
-    out.push(&human_size(row.target.size_bytes), Some(NSColor::secondaryLabelColor()));
-    out.tab();
-    let ratio = row.target.size_bytes as f64 / max_size.max(1) as f64;
-    let filled = (ratio * MAX_BAR as f64).ceil().max(1.0) as usize;
-    out.push(&"\u{2588}".repeat(filled.min(MAX_BAR)), Some(NSColor::tertiaryLabelColor()));
-    out
-}
-
-/// What a row shows while the pointer is on it: the full path the short name
-/// stands for, and how stale the artifacts are. Given the whole row width,
-/// since it replaces the size and bar columns for as long as it is up.
-pub fn path_row(target: &TargetDir, font: &NSFont, width: f64) -> Row {
-    let detail = format!(" \u{2022} {}", age(target.last_modified));
-    let path = fit_width(
-        &display_path(&target.path),
-        font,
-        width - text_width(&detail, font),
-    );
-    // The artifact directory itself is the part worth reading; the tree it sits
-    // in is context.
-    let split = path.rfind('/').map(|at| at + 1).unwrap_or(0);
-    let mut row = Row::new();
-    row.push(&path[..split], Some(NSColor::secondaryLabelColor()));
-    row.push(&path[split..], None);
-    row.push(&detail, Some(NSColor::tertiaryLabelColor()));
-    row
-}
-
-fn kind_width(row: &RowPlan, font: &NSFont) -> f64 {
-    if row.kind.is_empty() {
-        0.0
-    } else {
-        text_width(&format!("  {}", row.kind), font)
-    }
 }
 
 #[cfg(test)]
@@ -198,7 +120,6 @@ mod tests {
 
     #[test]
     fn a_small_group_keeps_its_floor_against_a_crowded_one() {
-        // 17 Rust targets must not push a 3-entry group down to nothing.
         assert_eq!(allocate(&[17, 3], 15), [12, 3]);
     }
 
@@ -221,7 +142,6 @@ mod tests {
         ];
         let mixed = plan_groups(&targets, 10);
         assert_eq!(mixed[0].rows[0].kind, "target");
-
         let single = plan_groups(&targets[..1], 10);
         assert_eq!(single[0].rows[0].kind, "");
     }
