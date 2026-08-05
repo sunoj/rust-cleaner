@@ -6,6 +6,8 @@
 - **Disk panel** (`src/disk_panel.rs`): the menu opens on free space as a headline number, a capacity gauge splitting used / build artifacts / free, and what cleaning would leave. Free disk was a footnote in the header caption before.
 - **Hover reveals the path** (`src/hover.rs`): a highlighted project row swaps its short name for the full path and the artifact's age. `NSMenuItem.toolTip` does not render in status-bar menus, so the row itself is the surface.
 
+Both appearances were checked on a running app: the gauge track sits at 26% gray so it stays visible on a dark menu without competing with the filled part on a light one.
+
 ### Changed
 - **The name column sizes itself** (`src/style.rs`): tab stops are measured from the names actually on screen instead of a fixed 28-character budget, so full names show wherever they fit; longer ones elide from the left and stay readable on hover.
 - **Rows are shared fairly across groups** (`src/menu_rows.rs`): every non-empty group keeps up to 3 rows before the biggest group takes the rest, so a small group is no longer reduced to a header and "3 more not shown".

@@ -69,7 +69,9 @@ fn gauge_row(disk: DiskSpace, panel: &DiskPanel, cells: usize) -> Row {
     let mut row = Row::new();
     row.push(&BLOCK.repeat(used), Some(gray(0.62)));
     row.push(&BLOCK.repeat(artifacts), Some(artifact_color()));
-    row.push(&BLOCK.repeat(free), Some(gray(0.16)));
+    // The track has to stay visible on a dark menu without competing with the
+    // filled part on a light one; 0.16 all but vanished in dark mode.
+    row.push(&BLOCK.repeat(free), Some(gray(0.26)));
     row
 }
 
