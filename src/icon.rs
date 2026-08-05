@@ -1,96 +1,75 @@
-// Icon rendering for WD-40. Generates rusty SF Symbol icons based on disk usage.
+// Menu bar glyph for WD-40: the can drawn as a monochrome template image.
 // Exports: `rusty_icon`, `rust_text_color`.
 // Deps: objc2, objc2_app_kit, objc2_foundation.
 
-use objc2::{AnyThread, rc::Retained};
-use objc2_app_kit::{NSBezierPath, NSColor, NSCompositingOperation, NSImage, NSImageSymbolConfiguration};
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
+use objc2::{rc::Retained, AnyThread};
+use objc2_app_kit::{NSBezierPath, NSColor, NSImage, NSLineCapStyle, NSLineJoinStyle};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-const ICON_NORMAL: &str = "internaldrive";
+/// Height of the glyph in the menu bar, in points.
+const GLYPH_H: f64 = 16.0;
+/// The design's artboard: viewBox "116 96 252 396".
+const VIEW_X: f64 = 116.0;
+const VIEW_Y: f64 = 96.0;
+const VIEW_W: f64 = 252.0;
+const VIEW_H: f64 = 396.0;
+/// Half a stroke sits outside the path, and the design's own artboard clips it
+/// on the right. Pad the canvas so nothing is shaved off.
+const PAD: f64 = 22.0;
 
+/// The can from the icon design, as a template image. It carries no colour of
+/// its own — macOS tints it with the menu bar, which is what the design asks
+/// for; artifact weight is still signalled by the tinted size beside it.
 #[allow(deprecated)]
-pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
-    let gb = total_bytes / (1024 * 1024 * 1024);
-    let s = NSString::from_str(ICON_NORMAL);
-    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(&s, None)?;
-
-    if gb < 5 {
-        base.setTemplate(true);
-        return Some(base);
-    }
-
-    // Style B: two-tone palette colors based on rust severity
-    let (c1, c2, spot_rgba, spot_count) = match gb {
-        5..=19 => (
-            (0.80, 0.50, 0.20), (0.90, 0.70, 0.40),  // light rust palette
-            (0.75, 0.40, 0.12, 0.7), 10u32,
-        ),
-        20..=49 => (
-            (0.70, 0.30, 0.10), (0.85, 0.50, 0.20),  // medium rust palette
-            (0.60, 0.20, 0.06, 0.8), 20,
-        ),
-        _ => (
-            (0.55, 0.15, 0.05), (0.75, 0.30, 0.10),  // heavy rust palette
-            (0.45, 0.10, 0.03, 0.95), 35,
-        ),
+pub fn rusty_icon(_total_bytes: u64) -> Option<Retained<NSImage>> {
+    let scale = GLYPH_H / (VIEW_H + PAD * 2.0);
+    let size = NSSize::new((VIEW_W + PAD * 2.0) * scale, GLYPH_H);
+    let image = NSImage::initWithSize(NSImage::alloc(), size);
+    let map = |x: f64, y: f64| {
+        NSPoint::new((x - VIEW_X + PAD) * scale, GLYPH_H - (y - VIEW_Y + PAD) * scale)
     };
 
-    let color1 = NSColor::colorWithSRGBRed_green_blue_alpha(c1.0, c1.1, c1.2, 1.0);
-    let color2 = NSColor::colorWithSRGBRed_green_blue_alpha(c2.0, c2.1, c2.2, 1.0);
-    let palette = NSArray::from_retained_slice(&[color1, color2]);
-    let config = NSImageSymbolConfiguration::configurationWithPaletteColors(&palette);
-    let tinted = base.imageWithSymbolConfiguration(&config)?;
-    tinted.setTemplate(false);
+    image.lockFocus();
+    NSColor::blackColor().setStroke();
 
-    // Draw icon + rust spots composited within icon alpha
-    let size = tinted.size();
-    let canvas = NSImage::initWithSize(NSImage::alloc(), size);
-    canvas.lockFocus();
+    // The straw: across the top, then down the left side.
+    let straw = NSBezierPath::new();
+    straw.moveToPoint(map(336.0, 138.0));
+    straw.lineToPoint(map(142.0, 138.0));
+    straw.lineToPoint(map(142.0, 214.0));
+    straw.setLineWidth(36.0 * scale);
+    straw.setLineCapStyle(NSLineCapStyle::Round);
+    straw.setLineJoinStyle(NSLineJoinStyle::Round);
+    straw.stroke();
 
-    // Draw base tinted icon
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
-    tinted.drawInRect_fromRect_operation_fraction(
-        rect, NSRect::ZERO, NSCompositingOperation::SourceOver, 1.0,
+    // The body.
+    let top_left = map(200.0, 196.0);
+    let body_rect = NSRect::new(
+        NSPoint::new(top_left.x, top_left.y - 272.0 * scale),
+        NSSize::new(152.0 * scale, 272.0 * scale),
     );
+    let radius = 28.0 * scale;
+    let body = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(body_rect, radius, radius);
+    body.setLineWidth(36.0 * scale);
+    body.stroke();
 
-    // Style D: rust spots clipped to icon shape via sourceAtop
-    let mut seed: u64 = 42;
-    for _ in 0..spot_count {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let fx = (seed >> 33) as f64 / (u32::MAX as f64);
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let fy = (seed >> 33) as f64 / (u32::MAX as f64);
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let fr = (seed >> 33) as f64 / (u32::MAX as f64);
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let fj = (seed >> 33) as f64 / (u32::MAX as f64);
-
-        let x = fx * size.width;
-        let y = fy * size.height;
-        let r = fr * 3.5 + 1.0;
-        let jr = spot_rgba.0 + fj * 0.12;
-        let jg = spot_rgba.1 + fj * 0.08;
-        let jb = spot_rgba.2 + fj * 0.04;
-
-        // Draw spot into a temp image, then composite sourceAtop
-        let spot_img = NSImage::initWithSize(NSImage::alloc(), size);
-        spot_img.lockFocus();
-        let spot_color = NSColor::colorWithSRGBRed_green_blue_alpha(jr, jg, jb, spot_rgba.3);
-        spot_color.setFill();
-        let oval = NSRect::new(NSPoint::new(x - r, y - r), NSSize::new(r * 2.0, r * 2.0));
-        NSBezierPath::bezierPathWithOvalInRect(oval).fill();
-        spot_img.unlockFocus();
-
-        spot_img.drawInRect_fromRect_operation_fraction(
-            rect, NSRect::ZERO, NSCompositingOperation::SourceAtop, 1.0,
-        );
+    // The two label bands.
+    for y in [300.0, 380.0] {
+        let band = NSBezierPath::new();
+        band.moveToPoint(map(200.0, y));
+        band.lineToPoint(map(352.0, y));
+        band.setLineWidth(26.0 * scale);
+        band.setLineCapStyle(NSLineCapStyle::Round);
+        band.stroke();
     }
 
-    canvas.unlockFocus();
-    canvas.setTemplate(false);
-    Some(canvas)
+    image.unlockFocus();
+    image.setTemplate(true);
+    Some(image)
 }
 
+/// Tint for the size shown beside the glyph — this is where artifact weight
+/// still reads, now that the glyph itself is monochrome.
 pub fn rust_text_color(total_bytes: u64) -> Retained<NSColor> {
     let gb = total_bytes / (1024 * 1024 * 1024);
     match gb {
