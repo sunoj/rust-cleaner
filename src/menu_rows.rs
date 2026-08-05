@@ -13,7 +13,9 @@ const FLOOR_PER_GROUP: usize = 3;
 pub struct RowPlan<'a> {
     pub index: usize,
     pub target: &'a TargetDir,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub kind: &'static str,
 }
 

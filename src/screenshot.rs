@@ -1,5 +1,5 @@
 // Screenshot harness: render each popover screen to PNG via view cache.
-// Activated when WD40_SCREENSHOT_DIR is set. Numbers come from the live scan.
+// Compiled only in debug builds (`cfg(debug_assertions)`); activated by WD40_SCREENSHOT_DIR.
 // Deps: objc2 AppKit/Foundation, crate::{names, popover, state, tasks}.
 
 use crate::names::display_names;

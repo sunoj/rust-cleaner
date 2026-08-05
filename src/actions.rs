@@ -55,9 +55,9 @@ fn with_state_ret_hours() -> u64 {
     hours
 }
 
-pub fn cycle_max_age(mtm: MainThreadMarker) {
+pub fn set_max_age(days: u64, mtm: MainThreadMarker) {
     with_state(|state| {
-        state.config.max_age_days = settings_view::next_age(state.config.max_age_days);
+        state.config.max_age_days = days.min(30);
         state.config.save();
         state.reset_selection();
     });

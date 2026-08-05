@@ -7,7 +7,7 @@ use crate::done_view;
 use crate::icon::{rust_text_color, rusty_icon};
 use crate::scan_view;
 use crate::settings_view;
-use crate::state::{with_state, with_state_ret, AppState, UiScreen};
+use crate::state::{with_state_ret, AppState, UiScreen};
 use crate::style::tinted;
 use crate::theme::Theme;
 use crate::widgets::POPOVER_WIDTH;
@@ -59,6 +59,7 @@ pub fn close() {
 }
 
 /// Open the popover if it is not already shown.
+#[cfg(debug_assertions)]
 pub fn ensure_open(mtm: MainThreadMarker) {
     let shown = POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|p| p.isShown()));
     if !shown {
@@ -67,6 +68,7 @@ pub fn ensure_open(mtm: MainThreadMarker) {
 }
 
 /// Content view currently hosted by the popover, for screenshot capture.
+#[cfg(debug_assertions)]
 pub fn content_view(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
     let _ = mtm;
     CONTROLLER.with(|cell| cell.borrow().as_ref().map(|c| c.view()))
@@ -124,14 +126,22 @@ fn ensure_popover(mtm: MainThreadMarker) {
     if POPOVER.with(|cell| cell.borrow().is_some()) {
         return;
     }
-    let controller = unsafe {
-        NSViewController::initWithNibName_bundle(NSViewController::alloc(mtm), None, None)
-    };
+    let controller =
+        NSViewController::initWithNibName_bundle(NSViewController::alloc(mtm), None, None);
     let popover = NSPopover::new(mtm);
-    let behavior = if crate::screenshot::enabled() {
-        NSPopoverBehavior::ApplicationDefined
-    } else {
-        NSPopoverBehavior::Transient
+    let behavior = {
+        #[cfg(debug_assertions)]
+        {
+            if crate::screenshot::enabled() {
+                NSPopoverBehavior::ApplicationDefined
+            } else {
+                NSPopoverBehavior::Transient
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            NSPopoverBehavior::Transient
+        }
     };
     popover.setBehavior(behavior);
     popover.setAnimates(false);

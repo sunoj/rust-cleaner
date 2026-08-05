@@ -35,10 +35,12 @@ impl Updater {
     }
 
     /// Action target for a "Check for Updates…" menu item.
+    #[allow(dead_code)]
     pub fn target(&self) -> &AnyObject {
         &self.controller
     }
 
+    #[allow(dead_code)]
     pub fn can_check(&self) -> bool {
         let updater = self.updater();
         let value: Bool = unsafe { msg_send![&*updater, canCheckForUpdates] };

@@ -30,6 +30,7 @@ pub fn gauge_fractions(disk: DiskSpace, reclaimable: u64) -> GaugeParts {
 }
 
 /// Integer cell split used by unit tests (same semantics as the old menu gauge).
+#[cfg(test)]
 pub fn gauge_cells(disk: DiskSpace, reclaimable: u64, cells: usize) -> (usize, usize, usize) {
     let used = disk.total_bytes.saturating_sub(disk.free_bytes);
     let artifacts = reclaimable.min(used);
@@ -43,6 +44,7 @@ pub fn gauge_cells(disk: DiskSpace, reclaimable: u64, cells: usize) -> (usize, u
     (used_cells, artifact_cells, cells - used_cells - artifact_cells)
 }
 
+#[cfg(test)]
 fn share(part: u64, total: u64, cells: usize) -> usize {
     if total == 0 {
         return 0;

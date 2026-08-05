@@ -92,6 +92,7 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
         });
         popover::refresh(mtm);
     }
+    #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
     if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
         spawn_clean_selected();
@@ -190,6 +191,7 @@ pub fn on_clean_done(mtm: MainThreadMarker) {
         state.screen = UiScreen::Done;
     });
     popover::refresh(mtm);
+    #[cfg(debug_assertions)]
     crate::screenshot::on_clean_finished(mtm);
 }
 

@@ -8,9 +8,9 @@ use crate::names::{age_short, display_names};
 use crate::selection::is_recent;
 use crate::state::AppState;
 use crate::theme::Theme;
+use crate::controls::{checkbox, filled_button, set_cmd_key, text_button_hint};
 use crate::widgets::{
-    self, add_line, add_size_wash, checkbox, filled_button, label, label_right, text_button,
-    CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
+    self, add_line, add_size_wash, label, label_right, label_wrap, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -27,24 +27,26 @@ pub const TAG_SHOW_MORE: isize = 2006;
 pub const TAG_ITEM_BASE: isize = 1000;
 
 const ROW_H: f64 = 40.0;
-const VISIBLE_CAP: usize = 12;
-const FOOTER_H: f64 = 100.0;
+/// Match the mock: show the largest few, offer a link for the rest.
+const VISIBLE_CAP: usize = 6;
+const FOOTER_H: f64 = 132.0;
 
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
     let sizing = state.total_size() == 0 && !state.targets.is_empty();
     let paths: Vec<_> = state.targets.iter().map(|t| t.path.clone()).collect();
     let overlap = sizes_may_overlap(&paths);
     let plans = plan_groups(&state.targets, if state.show_all { usize::MAX } else { VISIBLE_CAP });
-    let list_h = measure_list(&plans, state).min(360.0);
+    let list_h = measure_list(&plans).min(360.0);
     let height = header::HEADER_HEIGHT + list_h + FOOTER_H;
     let root = widgets::root_view(height, theme.surface, mtm);
 
+    // Header shows everything found; only the clean button counts the selection.
     header::draw_header(
         &root,
         height,
         &HeaderModel {
             disk: state.disk_stats(),
-            reclaimable: if sizing { 0 } else { state.selected_size() },
+            reclaimable: if sizing { 0 } else { state.total_size() },
             sizing,
             approximate: overlap,
             trailing: None,
@@ -55,58 +57,85 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
         mtm,
     );
 
-    let mut y = height - header::HEADER_HEIGHT;
+    draw_list(&root, state, &plans, sizing, height - header::HEADER_HEIGHT, theme, target, mtm);
+    draw_footer(&root, state, sizing, overlap, theme, target, mtm);
+    (root, height)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_list(
+    root: &NSView,
+    state: &AppState,
+    plans: &[crate::menu_rows::GroupPlan<'_>],
+    sizing: bool,
+    mut y: f64,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) {
     let list_bottom = FOOTER_H + 4.0;
     let names = display_names(&state.targets);
     let max_size = state.targets.iter().map(|t| t.size_bytes).max().unwrap_or(1).max(1);
-
-    for plan in &plans {
+    for plan in plans {
         if y <= list_bottom + ROW_H {
             break;
         }
-        y = draw_group_header(&root, y, plan.group, plan.count, plan.size, sizing, theme, mtm);
+        y = draw_group_header(root, y, plan.group, plan.count, plan.size, sizing, theme, mtm);
         for row in &plan.rows {
             if y <= list_bottom + ROW_H {
                 break;
             }
             y = draw_row(
-                &root, y, row.index, &names[row.index], row.target, max_size, sizing,
+                root, y, row.index, &names[row.index], row.target, max_size, sizing,
                 state.selected.contains(&row.index),
                 state.config.max_age_days, theme, target, mtm,
             );
         }
-        if plan.hidden > 0 && y > list_bottom + 28.0 {
-            let hidden_size = sum_bytes(
-                state.targets.iter().enumerate()
-                    .filter(|(i, td)| td.kind.group() == plan.group && !plan.rows.iter().any(|r| r.index == *i))
-                    .map(|(_, td)| td.size_bytes),
-            );
-            let title = format!("Show {} smaller \u{00b7} {}", plan.hidden, human_size(hidden_size));
-            text_button(
-                &root, &title, PAD_X, y - 22.0, CONTENT_WIDTH, sel!(handleShowMore:), target,
-                TAG_SHOW_MORE, theme.ink_2, mtm,
-            );
-            y -= 28.0;
-        }
-        if y > list_bottom + 8.0 {
-            add_line(&root, PAD_X, y - 4.0, CONTENT_WIDTH, theme.line, mtm);
-            y -= 8.0;
-        }
+        y = draw_show_more(root, state, plan, y, list_bottom, theme, target, mtm);
     }
-
     if plans.is_empty() && !sizing {
         label(
-            &root, "Nothing to clean \u{2014} everything is tidy", PAD_X, list_bottom + 20.0,
+            root, "Nothing to clean \u{2014} everything is tidy", PAD_X, list_bottom + 20.0,
             CONTENT_WIDTH, 20.0, 13.0, false, theme.ink_2, false, mtm,
         );
     }
-
-    draw_footer(&root, state, sizing, overlap, theme, target, mtm);
-    let _ = y;
-    (root, height)
 }
 
-fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>], state: &AppState) -> f64 {
+fn draw_show_more(
+    root: &NSView,
+    state: &AppState,
+    plan: &crate::menu_rows::GroupPlan<'_>,
+    mut y: f64,
+    list_bottom: f64,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> f64 {
+    if plan.hidden > 0 && y > list_bottom + 28.0 {
+        let hidden_size = sum_bytes(
+            state.targets.iter().enumerate()
+                .filter(|(i, td)| td.kind.group() == plan.group && !plan.rows.iter().any(|r| r.index == *i))
+                .map(|(_, td)| td.size_bytes),
+        );
+        let title = format!(
+            "Show {} smaller targets \u{00b7} {}",
+            plan.hidden,
+            human_size(hidden_size)
+        );
+        crate::controls::text_button(
+            root, &title, PAD_X, y - 22.0, CONTENT_WIDTH, sel!(handleShowMore:), target,
+            TAG_SHOW_MORE, theme.ink_2, mtm,
+        );
+        y -= 28.0;
+    }
+    if y > list_bottom + 8.0 {
+        add_line(root, PAD_X, y - 4.0, CONTENT_WIDTH, theme.line, mtm);
+        y -= 8.0;
+    }
+    y
+}
+
+fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>]) -> f64 {
     if plans.is_empty() {
         return 48.0;
     }
@@ -118,7 +147,6 @@ fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>], state: &AppState) -> 
         }
         h += 8.0;
     }
-    let _ = state;
     h.min(400.0)
 }
 
@@ -167,7 +195,8 @@ fn draw_row(
 ) -> f64 {
     let y = y_top - ROW_H;
     let frac = td.size_bytes as f64 / max_size as f64;
-    if on && !sizing {
+    // Size bars for every row (mock), not only the checked ones.
+    if !sizing {
         add_size_wash(parent, 0.0, y + 4.0, POPOVER_WIDTH, ROW_H - 8.0, frac, theme, mtm);
     }
     checkbox(parent, on, PAD_X, y + 12.0, sel!(handleToggleItem:), target, TAG_ITEM_BASE + index as isize, theme, mtm);
@@ -197,25 +226,57 @@ fn draw_footer(
     mtm: MainThreadMarker,
 ) {
     use crate::widgets::add_fill;
-    add_fill(parent, 0.0, 0.0, POPOVER_WIDTH, FOOTER_H, theme.surface, 1.0, mtm);
+    add_fill(parent, 0.0, 0.0, POPOVER_WIDTH, FOOTER_H, theme.surface, 1.0, 0.0, mtm);
     add_line(parent, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
-    let count = state.selected.len();
-    let title = if sizing {
-        "Measuring\u{2026}".into()
-    } else {
-        format!("Clean {count} selected  {}", human_size(state.selected_size()))
-    };
+    let (title, fill, ink) = clean_cta(state, sizing, theme);
     filled_button(
-        parent, &title, PAD_X, 52.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN,
-        theme.ink, theme.surface, mtm,
+        parent, &title, PAD_X, 78.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN,
+        fill, ink, mtm,
     );
+    label_wrap(parent, &footer_note(state, overlap), PAD_X, 26.0, CONTENT_WIDTH, 48.0, 11.0, theme.ink_3, mtm);
+    let rescan = text_button_hint(
+        parent, "Rescan", "\u{2318}R", PAD_X, 4.0, sel!(handleRescan:), target, TAG_RESCAN,
+        theme.ink_2, theme.ink_4, mtm,
+    );
+    set_cmd_key(&rescan, "r");
+    let settings = text_button_hint(
+        parent, "Settings", "\u{2318},", POPOVER_WIDTH - PAD_X - 96.0, 4.0,
+        sel!(openSettings:), target, TAG_SETTINGS, theme.ink_2, theme.ink_4, mtm,
+    );
+    set_cmd_key(&settings, ",");
+}
+
+fn clean_cta(
+    state: &AppState,
+    sizing: bool,
+    theme: &Theme,
+) -> (String, (f64, f64, f64), (f64, f64, f64)) {
+    if sizing {
+        return ("Measuring\u{2026}".into(), theme.ink, theme.surface);
+    }
+    let count = state.selected.len();
+    if count == 0 && !state.targets.is_empty() {
+        // Soft warning: recent stays unchecked, but the list still lets you proceed.
+        return ("Select targets to clean".into(), theme.surface_2, theme.ink_2);
+    }
+    (
+        format!("Clean {count} selected  {}", human_size(state.selected_size())),
+        theme.ink,
+        theme.surface,
+    )
+}
+
+fn footer_note(state: &AppState, overlap: bool) -> String {
     let recent = state
         .targets
         .iter()
         .filter(|td| is_recent(td, state.config.max_age_days))
         .count();
     let mut note = if recent > 0 {
-        format!("{recent} recent build{} excluded. ", if recent == 1 { "" } else { "s" })
+        format!(
+            "{recent} recent build{} excluded by default \u{2014} tick any to include. ",
+            if recent == 1 { "" } else { "s" }
+        )
     } else {
         String::new()
     };
@@ -224,10 +285,5 @@ fn draw_footer(
         note.push_str("; sizes may overlap (APFS clones)");
     }
     note.push('.');
-    label(parent, &note, PAD_X, 28.0, CONTENT_WIDTH, 20.0, 11.0, false, theme.ink_3, false, mtm);
-    text_button(parent, "Rescan", PAD_X, 4.0, 60.0, sel!(handleRescan:), target, TAG_RESCAN, theme.ink_2, mtm);
-    text_button(
-        parent, "Settings", POPOVER_WIDTH - PAD_X - 70.0, 4.0, 70.0, sel!(openSettings:), target,
-        TAG_SETTINGS, theme.ink_2, mtm,
-    );
+    note
 }

@@ -5,6 +5,7 @@
 mod actions;
 mod autostart;
 mod clean_view;
+mod controls;
 mod disk_gauge;
 mod done_view;
 mod header;
@@ -13,6 +14,7 @@ mod menu_rows;
 mod names;
 mod popover;
 mod scan_view;
+#[cfg(debug_assertions)]
 mod screenshot;
 mod selection;
 mod settings_view;
@@ -28,7 +30,9 @@ use state::{with_state, AppState, UiScreen};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSButton, NSStatusBar};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSButton, NSSlider, NSStatusBar,
+};
 use objc2_foundation::{MainThreadMarker, NSObject};
 use std::cell::RefCell;
 use updater::Updater;
@@ -91,9 +95,10 @@ define_class!(
             actions::cycle_interval(self.mtm());
         }
 
-        #[unsafe(method(settingsCycleMaxAge:))]
-        fn settings_cycle_max_age(&self, _sender: &AnyObject) {
-            actions::cycle_max_age(self.mtm());
+        #[unsafe(method(settingsSetMaxAge:))]
+        fn settings_set_max_age(&self, sender: &NSSlider) {
+            let days = sender.doubleValue().round().clamp(0.0, 30.0) as u64;
+            actions::set_max_age(days, self.mtm());
         }
 
         #[unsafe(method(settingsCycleDepth:))]

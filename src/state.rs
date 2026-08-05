@@ -14,8 +14,6 @@ use wd40::config::Config;
 use wd40::disk::{disk_space, sum_bytes, DiskSpace};
 use wd40::scanner::{ArtifactGroup, TargetDir};
 
-const SECONDS_PER_DAY: u64 = 86_400;
-
 thread_local! {
     static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
 }
@@ -38,6 +36,7 @@ pub enum CleanItemStatus {
 
 #[derive(Clone)]
 pub struct CleanItem {
+    #[allow(dead_code)]
     pub index: usize,
     pub name: String,
     pub size_bytes: u64,
@@ -91,10 +90,6 @@ impl AppState {
 
     pub fn selected_size(&self) -> u64 {
         selected_bytes(&self.targets, &self.selected)
-    }
-
-    pub fn max_age(&self) -> Duration {
-        Duration::from_secs(self.config.max_age_days.saturating_mul(SECONDS_PER_DAY))
     }
 
     pub fn reference_path(&self) -> Option<PathBuf> {

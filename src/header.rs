@@ -14,6 +14,7 @@ pub const HEADER_HEIGHT: f64 = 78.0;
 
 pub struct HeaderModel {
     pub disk: Option<DiskSpace>,
+    /// Total found reclaimable (not the current selection).
     pub reclaimable: u64,
     pub sizing: bool,
     pub approximate: bool,
@@ -55,8 +56,7 @@ pub fn draw_header(parent: &NSView, y_top: f64, model: &HeaderModel, theme: &The
             format!("{bound}{} reclaimable", human_size(model.reclaimable))
         }
     });
-    // Accent swatch
-    add_fill(parent, PAD_X, y_top - 62.0, 7.0, 7.0, theme.accent, 1.0, mtm);
+    add_fill(parent, PAD_X, y_top - 62.0, 7.0, 7.0, theme.accent, 1.0, 2.0, mtm);
     label(parent, &left, PAD_X + 14.0, y_top - 66.0, 200.0, 16.0, 13.0, false, theme.ink, false, mtm);
     if let Some(right) = &model.detail_right {
         label_right(
@@ -83,9 +83,9 @@ fn draw_gauge(
 ) {
     let parts = gauge_fractions(disk, reclaimable);
     let w = CONTENT_WIDTH;
-    add_fill(parent, PAD_X, y, w, 7.0, theme.surface_2, 1.0, mtm);
+    add_fill(parent, PAD_X, y, w, 7.0, theme.surface_2, 1.0, 3.5, mtm);
     let used_w = w * parts.used;
     let art_w = w * parts.artifacts;
-    add_fill(parent, PAD_X, y, used_w, 7.0, theme.ink_4, 1.0, mtm);
-    add_fill(parent, PAD_X + used_w, y, art_w.max(0.0), 7.0, theme.accent, 1.0, mtm);
+    add_fill(parent, PAD_X, y, used_w, 7.0, theme.ink_4, 1.0, 3.5, mtm);
+    add_fill(parent, PAD_X + used_w, y, art_w.max(0.0), 7.0, theme.accent, 1.0, 3.5, mtm);
 }

@@ -34,6 +34,7 @@ pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
         .fold(0_u64, |sum, n| sum.saturating_add(n))
 }
 
+#[allow(dead_code)]
 pub fn age_days(target: &TargetDir) -> u64 {
     SystemTime::now()
         .duration_since(target.last_modified)

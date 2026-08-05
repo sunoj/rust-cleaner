@@ -4,9 +4,9 @@
 
 use crate::state::{AppState, DoneSummary};
 use crate::theme::Theme;
+use crate::controls::{filled_button, text_button};
 use crate::widgets::{
-    self, add_fill, add_line, filled_button, label, label_right, text_button, CONTENT_WIDTH, PAD_X,
-    POPOVER_WIDTH,
+    self, add_fill, add_line, label, label_right, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -54,8 +54,8 @@ fn draw_summary(parent: &NSView, height: f64, s: &DoneSummary, theme: &Theme, mt
     if s.total_bytes > 0 {
         let free_frac = s.free_after as f64 / s.total_bytes as f64;
         let used_w = CONTENT_WIDTH * (1.0 - free_frac).clamp(0.0, 1.0);
-        add_fill(parent, PAD_X, height - 58.0, CONTENT_WIDTH, 7.0, theme.surface_2, 1.0, mtm);
-        add_fill(parent, PAD_X, height - 58.0, used_w, 7.0, theme.ink_4, 1.0, mtm);
+        add_fill(parent, PAD_X, height - 58.0, CONTENT_WIDTH, 7.0, theme.surface_2, 1.0, 3.5, mtm);
+        add_fill(parent, PAD_X, height - 58.0, used_w, 7.0, theme.ink_4, 1.0, 3.5, mtm);
     }
 
     label(
@@ -103,7 +103,7 @@ fn draw_stat_row(
     let y = y_top - 40.0;
     let bg = if warn { theme.accent_weak } else { theme.surface_2 };
     let fg = if warn { theme.warn } else { theme.ink_2 };
-    add_fill(parent, PAD_X, y + 8.0, 22.0, 22.0, bg, 1.0, mtm);
+    add_fill(parent, PAD_X, y + 8.0, 22.0, 22.0, bg, 1.0, 6.0, mtm);
     label(parent, count, PAD_X + 2.0, y + 11.0, 18.0, 16.0, 11.0, false, fg, true, mtm);
     label(parent, title, PAD_X + 32.0, y + 12.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
     label_right(

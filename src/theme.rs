@@ -12,11 +12,13 @@ use objc2_foundation::NSArray;
 /// Mapped from the design system; accent is the design's faded-rust opt-in.
 #[derive(Clone, Copy)]
 pub struct Theme {
+    #[allow(dead_code)]
     pub dark: bool,
     pub ink: (f64, f64, f64),
     pub ink_2: (f64, f64, f64),
     pub ink_3: (f64, f64, f64),
     pub ink_4: (f64, f64, f64),
+    #[allow(dead_code)]
     pub paper: (f64, f64, f64),
     pub surface: (f64, f64, f64),
     pub surface_2: (f64, f64, f64),

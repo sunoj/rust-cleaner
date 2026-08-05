@@ -54,18 +54,6 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
-pub fn age(modified: SystemTime) -> String {
-    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
-        return "modified just now".to_string();
-    };
-    match elapsed.as_secs() / SECONDS_PER_DAY {
-        0 => "modified today".to_string(),
-        1 => "modified yesterday".to_string(),
-        days => format!("modified {days} days ago"),
-    }
-}
-
-/// Compact age for popover meta lines (`3d ago`).
 pub fn age_short(modified: SystemTime) -> String {
     let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
         return "now".to_string();
@@ -74,6 +62,19 @@ pub fn age_short(modified: SystemTime) -> String {
         0 => "today".to_string(),
         1 => "1d ago".to_string(),
         days => format!("{days}d ago"),
+    }
+}
+
+/// Longer age phrase kept for the CLI / future menus.
+#[allow(dead_code)]
+pub fn age(modified: SystemTime) -> String {
+    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
+        return "modified just now".to_string();
+    };
+    match elapsed.as_secs() / SECONDS_PER_DAY {
+        0 => "modified today".to_string(),
+        1 => "modified yesterday".to_string(),
+        days => format!("modified {days} days ago"),
     }
 }
 
