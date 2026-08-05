@@ -21,7 +21,10 @@ pub fn root_view(height: f64, _fill: (f64, f64, f64), mtm: MainThreadMarker) -> 
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(POPOVER_WIDTH, height)),
     );
     view.setMaterial(NSVisualEffectMaterial::Popover);
-    view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    // Blend within the window, not behind it. Behind-window vibrancy let the
+    // desktop through and the design's flat mid-greys stopped being legible on
+    // top of it — the mock's panel is an opaque surface, not a translucent one.
+    view.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
     view.setState(NSVisualEffectState::Active);
     view.into_super()
 }

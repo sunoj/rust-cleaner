@@ -420,12 +420,15 @@ fn collect_dev_caches(found: &mut Vec<TargetDir>) {
         home.join("Library/Developer/Xcode/DerivedData"),
         home.join("Library/Developer/Xcode/ModuleCache.noindex"),
         home.join("Library/Caches/Homebrew"),
-        home.join(".npm"),
+        // ~/.npm is npm's cache *root*, but it also holds _logs and npx state.
+        // Only the content-addressable store is safe to drop wholesale.
+        home.join(".npm/_cacache"),
+        home.join("Library/pnpm/store"),
         home.join(".cache/pnpm"),
         home.join(".local/share/pnpm/store"),
-        home.join(".cache/yarn"),
-        home.join(".config/yarn"),
         home.join(".pnpm-store"),
+        home.join("Library/Caches/Yarn"),
+        home.join(".cache/yarn"),
         PathBuf::from("/opt/homebrew/var/homebrew/cache"),
         PathBuf::from("/usr/local/var/homebrew/cache"),
     ] {

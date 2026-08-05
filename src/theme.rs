@@ -1,11 +1,10 @@
 // Design tokens from docs/design/.../colors_and_type.css (faded-rust accent).
-// Exports: `Theme`, `Theme::current`, hex→NSColor helpers.
+// Exports: `Theme`, `Theme::current_app`, hex→NSColor helpers.
 // Deps: objc2_app_kit, objc2_foundation.
 
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSView,
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor,
 };
 use objc2_foundation::NSArray;
 
@@ -72,9 +71,21 @@ impl Theme {
         }
     }
 
-    /// Resolve against a view's effective appearance (Aqua vs Dark Aqua).
-    pub fn current(view: &NSView) -> Self {
-        if is_dark(view) {
+    /// Resolve against the application's appearance, which is what the
+    /// popover's material renders against. The status-bar button is not a
+    /// substitute: the menu bar is dark under a dark wallpaper even while the
+    /// system is in Light Mode, which paired light material with dark-mode ink.
+    pub fn current_app(mtm: objc2_foundation::MainThreadMarker) -> Self {
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        let names = NSArray::from_slice(&[
+            unsafe { NSAppearanceNameAqua },
+            unsafe { NSAppearanceNameDarkAqua },
+        ]);
+        let dark = app
+            .effectiveAppearance()
+            .bestMatchFromAppearancesWithNames(&names)
+            .is_some_and(|name| &*name == unsafe { NSAppearanceNameDarkAqua });
+        if dark {
             Self::dark_theme()
         } else {
             Self::light()
@@ -95,18 +106,6 @@ fn hex(value: u32) -> (f64, f64, f64) {
     let g = ((value >> 8) & 0xff) as f64 / 255.0;
     let b = (value & 0xff) as f64 / 255.0;
     (r, g, b)
-}
-
-fn is_dark(view: &NSView) -> bool {
-    let appearance = view.effectiveAppearance();
-    let names = NSArray::from_slice(&[
-        unsafe { NSAppearanceNameAqua },
-        unsafe { NSAppearanceNameDarkAqua },
-    ]);
-    match appearance.bestMatchFromAppearancesWithNames(&names) {
-        Some(name) => &*name == unsafe { NSAppearanceNameDarkAqua },
-        None => false,
-    }
 }
 
 /// Force the app appearance for screenshot / preview runs.

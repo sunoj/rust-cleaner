@@ -172,10 +172,8 @@ fn status_theme(state: &AppState, mtm: MainThreadMarker) -> Theme {
             return Theme::dark_theme();
         }
     }
-    match state.status_item.button(mtm) {
-        Some(button) => Theme::current(&button),
-        None => Theme::light(),
-    }
+    let _ = state;
+    Theme::current_app(mtm)
 }
 
 fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
