@@ -97,9 +97,17 @@ pub fn draw_scan_header(
     draw_scan_gauge(parent, y_top - 59.0, disk, reclaimable, theme, mtm);
     let used = disk.total_bytes.saturating_sub(disk.free_bytes).min(disk.total_bytes);
     let reclaimable = reclaimable.min(used);
-    draw_legend(parent, y_top - 86.0, "Reclaimable", wd40::scanner::human_size(reclaimable), theme.accent, theme, PAD_X, mtm);
-    draw_legend(parent, y_top - 86.0, "In use", wd40::scanner::human_size(used.saturating_sub(reclaimable)), theme.ink_4, theme, PAD_X + 116.0, mtm);
-    draw_legend(parent, y_top - 86.0, "Free", wd40::scanner::human_size(disk.free_bytes), theme.pos, theme, PAD_X + 232.0, mtm);
+    draw_legend_row(
+        parent,
+        y_top - 86.0,
+        [
+            ("Reclaimable", wd40::scanner::human_size(reclaimable), theme.accent),
+            ("In use", wd40::scanner::human_size(used.saturating_sub(reclaimable)), theme.ink_4),
+            ("Free", wd40::scanner::human_size(disk.free_bytes), theme.pos),
+        ],
+        theme,
+        mtm,
+    );
 
     let after = if sizing {
         disk.free_bytes
@@ -127,19 +135,43 @@ fn draw_scan_gauge(
     add_fill(parent, PAD_X + used_w + art_w, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);
 }
 
-fn draw_legend(
+/// Lay the three legend items out at their natural widths and spread the slack
+/// between them, as the mock's space-between does. Fixed columns clipped
+/// "Reclaimable" into the figure beside it.
+fn draw_legend_row(
     parent: &NSView,
     y: f64,
-    title: &str,
-    value: String,
-    swatch: (f64, f64, f64),
+    items: [(&str, String, (f64, f64, f64)); 3],
     theme: &Theme,
-    x: f64,
     mtm: MainThreadMarker,
 ) {
-    add_fill(parent, x, y + 4.0, 8.0, 8.0, swatch, 1.0, 2.0, mtm);
-    label(parent, title, x + 14.0, y, 70.0, 17.0, 12.5, false, theme.ink, false, mtm);
-    label(parent, &value, x + 78.0, y, 38.0, 17.0, 12.0, false, theme.ink_2, true, mtm);
+    const SWATCH: f64 = 8.0;
+    const AFTER_SWATCH: f64 = 6.0;
+    const BEFORE_VALUE: f64 = 6.0;
+    let widths: Vec<(f64, f64)> = items
+        .iter()
+        .map(|(title, value, _)| {
+            (
+                widgets::fitted_width(title, 12.5, false, mtm),
+                widgets::fitted_width(value, 12.0, true, mtm),
+            )
+        })
+        .collect();
+    let natural: f64 = widths
+        .iter()
+        .map(|(t, v)| SWATCH + AFTER_SWATCH + t + BEFORE_VALUE + v)
+        .sum();
+    let gap = ((CONTENT_WIDTH - natural) / 2.0).max(8.0);
+
+    let mut x = PAD_X;
+    for ((title, value, swatch), (title_w, value_w)) in items.iter().zip(widths) {
+        add_fill(parent, x, y + 4.0, SWATCH, SWATCH, *swatch, 1.0, 2.0, mtm);
+        let title_x = x + SWATCH + AFTER_SWATCH;
+        label(parent, title, title_x, y, title_w + 2.0, 17.0, 12.5, false, theme.ink, false, mtm);
+        let value_x = title_x + title_w + BEFORE_VALUE;
+        label(parent, value, value_x, y, value_w + 2.0, 17.0, 12.0, false, theme.ink_2, true, mtm);
+        x = value_x + value_w + gap;
+    }
 }
 
 pub fn scan_size(bytes: u64) -> String {

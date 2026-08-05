@@ -150,10 +150,14 @@ pub fn clean_button(
     action: Sel,
     target: &AnyObject,
     tag: isize,
+    enabled: bool,
     theme: &Theme,
     mtm: MainThreadMarker,
 ) {
-    add_fill(parent, x, y, w, 34.0, theme.ink, 1.0, 8.0, mtm);
+    // With nothing ticked the button would delete nothing; say so by being
+    // unavailable rather than by inviting a click that does nothing.
+    let fill_alpha = if enabled { 1.0 } else { 0.28 };
+    add_fill(parent, x, y, w, 34.0, theme.ink, fill_alpha, 8.0, mtm);
     crate::widgets::symbol_view(parent, "trash", x + 76.0, y + 10.0, 13.0, theme.surface, mtm);
     crate::widgets::label(parent, title, x + 97.0, y + 8.0, 132.0, 18.0, 13.5, false, theme.surface, false, mtm);
     let amount = crate::widgets::label(parent, size, x + 232.0, y + 9.0, 54.0, 16.0, 12.5, false, theme.surface, true, mtm);
@@ -164,6 +168,7 @@ pub fn clean_button(
     button.setBordered(false);
     button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, 34.0)));
     button.setTag(tag);
+    button.setEnabled(enabled);
     parent.addSubview(&button);
 }
 

@@ -6,7 +6,7 @@ use crate::header;
 use crate::hover_row::hover_row;
 use crate::menu_rows::plan_groups;
 use crate::names::{age_short, display_names};
-use crate::selection::is_recent;
+use crate::selection::{group_selection, is_recent, GroupSelection};
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::controls::{checkbox, clean_button, set_cmd_key, text_button_hint, text_button_underlined};
@@ -72,7 +72,7 @@ fn draw_list(
         if y <= list_bottom + ROW_H {
             break;
         }
-        y = draw_group_header(root, y, plan.group, plan.count, plan.size, sizing, theme, mtm);
+        y = draw_group_header(root, state, y, plan.group, plan.count, plan.size, sizing, theme, target, mtm);
         for row in &plan.rows {
             if y <= list_bottom + ROW_H {
                 break;
@@ -145,27 +145,40 @@ fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>]) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn draw_group_header(
     parent: &NSView,
+    state: &AppState,
     y_top: f64,
     group: ArtifactGroup,
     count: usize,
     size: u64,
     sizing: bool,
     theme: &Theme,
+    target: &AnyObject,
     mtm: MainThreadMarker,
 ) -> f64 {
     let y = y_top - GROUP_H;
-    widgets::symbol_view(parent, group.symbol(), PAD_X, y + 6.0, 15.0, theme.ink_3, mtm);
+    // The mock draws no checkbox here, but selecting a whole group at once is a
+    // requirement of its own; the header is the only place it can live.
+    let selection = group_selection(&state.targets, &state.selected, group);
+    let index = ArtifactGroup::ALL.iter().position(|g| *g == group).unwrap_or(0);
+    checkbox(
+        parent, selection == GroupSelection::On, PAD_X, y + 6.0,
+        sel!(handleToggleGroup:), target, TAG_GROUP_BASE + index as isize, theme, mtm,
+    );
+    if selection == GroupSelection::Mixed {
+        widgets::add_fill(parent, PAD_X + 3.0, y + 12.5, 9.0, 2.0, theme.ink, 1.0, 1.0, mtm);
+    }
+    widgets::symbol_view(parent, group.symbol(), PAD_X + 23.0, y + 6.0, 15.0, theme.ink_3, mtm);
     let title = match group {
         ArtifactGroup::Rust => "RUST TARGETS",
         ArtifactGroup::NodeModules => "NODE MODULES",
         ArtifactGroup::BuildOutput => "BUILD OUTPUT",
         ArtifactGroup::Caches => "CACHES",
     };
-    label_tracked(parent, title, PAD_X + 23.0, y + 7.0, 120.0, 17.0, 11.5, false, theme.ink_3, true, 0.69, mtm);
-    widgets::add_fill(parent, PAD_X + 143.0, y + 5.0, 28.0, 17.0, theme.surface_2, 1.0, 4.0, mtm);
-    label(parent, &count.to_string(), PAD_X + 148.0, y + 6.0, 18.0, 15.0, 10.5, false, theme.ink_3, true, mtm);
+    label_tracked(parent, title, PAD_X + 46.0, y + 7.0, 120.0, 17.0, 11.5, false, theme.ink_3, true, 0.69, mtm);
+    widgets::add_fill(parent, PAD_X + 166.0, y + 5.0, 28.0, 17.0, theme.surface_2, 1.0, 4.0, mtm);
+    label(parent, &count.to_string(), PAD_X + 171.0, y + 6.0, 18.0, 15.0, 10.5, false, theme.ink_3, true, mtm);
     if !sizing {
-        label_right(parent, &header::scan_size(size), PAD_X + 180.0, y + 7.0, CONTENT_WIDTH - 180.0, 17.0, 12.0, theme.ink_2, true, mtm);
+        label_right(parent, &header::scan_size(size), PAD_X + 203.0, y + 7.0, CONTENT_WIDTH - 203.0, 17.0, 12.0, theme.ink_2, true, mtm);
     }
     y_top - GROUP_H
 }
@@ -204,7 +217,7 @@ fn draw_row(
         let badge = widgets::add_fill(&row, PAD_X + 182.0, 3.0, 50.0, 17.0, theme.surface, 1.0, 3.0, mtm);
         badge.setBorderWidth(1.0);
         badge.setBorderColor(&Theme::color_alpha(theme.warn, 0.35));
-        label_tracked(&row, "RECENT", PAD_X + 186.0, 5.0, 42.0, 13.0, 10.0, false, theme.warn, true, 0.4, mtm);
+        label_tracked(&row, "RECENT", PAD_X + 186.0, 5.0, 54.0, 13.0, 10.0, false, theme.warn, true, 0.4, mtm);
     }
     let size_text = if sizing { "\u{2026}".into() } else { header::scan_size(td.size_bytes) };
     label_right(&row, &size_text, PAD_X + 250.0, 12.0, CONTENT_WIDTH - 250.0, 16.0, 13.0, theme.ink, true, mtm);
@@ -222,7 +235,8 @@ fn draw_footer(
 ) {
     add_line(parent, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
     let (title, size) = clean_cta(state, sizing);
-    clean_button(parent, &title, &size, PAD_X, 82.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN, theme, mtm);
+    let armed = !sizing && !state.selected.is_empty();
+    clean_button(parent, &title, &size, PAD_X, 82.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN, armed, theme, mtm);
     label_wrap(parent, &footer_note(state, overlap), PAD_X, 40.0, CONTENT_WIDTH, 33.0, 11.5, theme.ink_3, mtm);
     let rescan = text_button_hint(parent, "Rescan", "\u{2318}R", PAD_X, 13.0, sel!(handleRescan:), target, TAG_RESCAN, theme.ink_2, theme.ink_4, mtm);
     set_cmd_key(&rescan, "r");

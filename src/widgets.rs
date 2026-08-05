@@ -257,6 +257,27 @@ pub fn label_right(
     field
 }
 
+/// Width this text needs at this size, measured with a throwaway field so a
+/// caller can lay out by content instead of guessing a column width.
+pub fn fitted_width(text: &str, size: f64, mono: bool, mtm: MainThreadMarker) -> f64 {
+    let field = NSTextField::initWithFrame(
+        NSTextField::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+    );
+    field.setStringValue(&NSString::from_str(text));
+    field.setBezeled(false);
+    field.setDrawsBackground(false);
+    field.setEditable(false);
+    let font = if mono {
+        NSFont::monospacedSystemFontOfSize_weight(size, 0.23)
+    } else {
+        NSFont::systemFontOfSize(size)
+    };
+    field.setFont(Some(&font));
+    field.sizeToFit();
+    field.frame().size.width
+}
+
 /// Soft accent wash behind a row (design: rgba(149,96,74,.09)) — size bar.
 pub fn add_size_wash(
     parent: &NSView,
