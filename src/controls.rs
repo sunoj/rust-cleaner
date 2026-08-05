@@ -126,7 +126,7 @@ pub fn checkbox(
     if on {
         add_fill(parent, x, y, 15.0, 15.0, theme.ink, 1.0, 4.0, mtm);
     } else {
-        let box_ = add_fill(parent, x, y, 15.0, 15.0, theme.surface, 1.0, 4.0, mtm);
+        let box_ = add_fill(parent, x, y, 15.0, 15.0, theme.surface_2, 0.78, 4.0, mtm);
         box_.setBorderWidth(1.0);
         box_.setBorderColor(&Theme::color(theme.line_2));
     }

@@ -86,6 +86,12 @@ pub fn project_name(td: &TargetDir) -> String {
             // names like "smart-router-target" stay recognizable.
             dir_name.strip_prefix("cc-target-").unwrap_or(dir_name).to_string()
         }
+        ArtifactKind::Cache => td
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("cache")
+            .to_string(),
         _ => {
             if let Some(home) = dirs::home_dir() {
                 // Under ~/.cargo-target/<project>[/<session>]/, show path relative to the root.

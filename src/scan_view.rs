@@ -125,7 +125,7 @@ fn draw_show_more(
         );
         crate::controls::text_button(
             root, &title, PAD_X, y - 22.0, CONTENT_WIDTH, sel!(handleShowMore:), target,
-            TAG_SHOW_MORE, theme.ink_2, mtm,
+            TAG_SHOW_MORE, theme.ink, mtm,
         );
         y -= 28.0;
     }
@@ -178,13 +178,14 @@ fn draw_group_header(
         ArtifactGroup::Rust => "rust targets",
         ArtifactGroup::NodeModules => "node modules",
         ArtifactGroup::BuildOutput => "build output",
+        ArtifactGroup::Caches => "caches",
     };
-    label(parent, title, PAD_X + 26.0, y, 134.0, 14.0, 11.5, false, theme.ink_3, true, mtm);
-    label(parent, &count.to_string(), PAD_X + 156.0, y, 30.0, 14.0, 10.5, false, theme.ink_3, true, mtm);
+    label(parent, title, PAD_X + 26.0, y, 134.0, 14.0, 11.5, false, theme.ink_2, true, mtm);
+    label(parent, &count.to_string(), PAD_X + 156.0, y, 30.0, 14.0, 10.5, false, theme.ink_2, true, mtm);
     if !sizing {
         label_right(
             parent, &human_size(size), PAD_X + 180.0, y, CONTENT_WIDTH - 180.0, 14.0, 12.0,
-            theme.ink_2, true, mtm,
+            theme.ink, true, mtm,
         );
     }
     y_top - 28.0
@@ -213,7 +214,11 @@ fn draw_row(
     }
     checkbox(parent, on, PAD_X, y + 12.0, sel!(handleToggleItem:), target, TAG_ITEM_BASE + index as isize, theme, mtm);
     label(parent, name, PAD_X + 26.0, y + 18.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
-    let meta = format!("{} \u{00b7} {}", td.kind.label(), age_short(td.last_modified));
+    let meta = if td.kind.group() == ArtifactGroup::Caches {
+        format!("{} \u{00b7} network downloads to rebuild", td.kind.label())
+    } else {
+        format!("{} \u{00b7} {}", td.kind.label(), age_short(td.last_modified))
+    };
     label(parent, &meta, PAD_X + 26.0, y + 4.0, 180.0, 14.0, 11.0, false, theme.ink_3, true, mtm);
     if is_recent(td, max_age_days) {
         label(
@@ -243,15 +248,15 @@ fn draw_footer(
         parent, &title, PAD_X, 78.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN,
         fill, ink, mtm,
     );
-    label_wrap(parent, &footer_note(state, overlap), PAD_X, 26.0, CONTENT_WIDTH, 48.0, 11.0, theme.ink_3, mtm);
+    label_wrap(parent, &footer_note(state, overlap), PAD_X, 26.0, CONTENT_WIDTH, 48.0, 11.0, theme.ink_2, mtm);
     let rescan = text_button_hint(
         parent, "Rescan", "\u{2318}R", PAD_X, 4.0, sel!(handleRescan:), target, TAG_RESCAN,
-        theme.ink_2, theme.ink_4, mtm,
+        theme.ink, theme.ink_3, mtm,
     );
     set_cmd_key(&rescan, "r");
     let settings = text_button_hint(
         parent, "Settings", "\u{2318},", POPOVER_WIDTH - PAD_X - 96.0, 4.0,
-        sel!(openSettings:), target, TAG_SETTINGS, theme.ink_2, theme.ink_4, mtm,
+        sel!(openSettings:), target, TAG_SETTINGS, theme.ink, theme.ink_3, mtm,
     );
     set_cmd_key(&settings, ",");
 }
@@ -284,13 +289,13 @@ fn footer_note(state: &AppState, overlap: bool) -> String {
         .count();
     let mut note = if recent > 0 {
         format!(
-            "{recent} recent build{} excluded by default \u{2014} tick any to include. ",
+            "{recent} recent build{} start unchecked. ",
             if recent == 1 { "" } else { "s" }
         )
     } else {
         String::new()
     };
-    note.push_str("Removed targets rebuild on the next cargo build");
+    note.push_str("Ticked rows are cleaned; caches may need network downloads to rebuild");
     if overlap {
         note.push_str("; sizes may overlap (APFS clones)");
     }

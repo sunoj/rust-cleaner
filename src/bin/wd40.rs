@@ -134,6 +134,7 @@ fn parse_group_flag(args: &[String]) -> Option<ArtifactGroup> {
                 "rust" | "r" => Some(ArtifactGroup::Rust),
                 "node" | "n" | "node_modules" => Some(ArtifactGroup::NodeModules),
                 "build" | "b" => Some(ArtifactGroup::BuildOutput),
+                "cache" | "caches" => Some(ArtifactGroup::Caches),
                 _ => None,
             };
         }
@@ -204,7 +205,7 @@ COMMANDS:
     help, -h           Show this help
 
 OPTIONS:
-    -g, --group <type> Filter by group: rust, node, build
+    -g, --group <type> Filter by group: rust, node, build, caches
     -d, --days <N>     Age threshold for clean-old (default: from config)
     -n, --dry-run      Show what would be cleaned without deleting
 
@@ -212,6 +213,7 @@ EXAMPLES:
     wd40                     Scan and show all artifacts
     wd40 scan -g rust        Show only Rust targets
     wd40 clean -g node       Clean all node_modules
+    wd40 scan -g caches      Show only regenerable caches
     wd40 clean-old -d 14     Clean artifacts older than 14 days
     wd40 clean --dry-run     Preview what would be cleaned
 

@@ -86,6 +86,7 @@ fn group_label(group: ArtifactGroup) -> String {
         ArtifactGroup::Rust => "Rust targets removed".into(),
         ArtifactGroup::NodeModules => "Node modules removed".into(),
         ArtifactGroup::BuildOutput => "Build output removed".into(),
+        ArtifactGroup::Caches => "Caches removed".into(),
     }
 }
 
