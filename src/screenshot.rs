@@ -7,7 +7,6 @@ use crate::popover;
 use crate::state::{
     with_state, CleanItem, CleanItemStatus, CleanProgress, UiScreen,
 };
-use crate::tasks;
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
 use objc2_foundation::{MainThreadMarker, NSDictionary, NSString};
 use std::path::{Path, PathBuf};
@@ -16,7 +15,6 @@ use std::time::Duration;
 use wd40::scanner::ArtifactGroup;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
-static AWAIT_DONE: AtomicBool = AtomicBool::new(false);
 
 pub fn enabled() -> bool {
     std::env::var_os("WD40_SCREENSHOT_DIR").is_some()
@@ -30,20 +28,6 @@ pub fn maybe_start(_mtm: MainThreadMarker) {
         std::thread::sleep(Duration::from_millis(400));
         dispatch(sequence);
     });
-}
-
-/// Called from `tasks::on_clean_done` so the done frame is captured after a real clean.
-pub fn on_clean_finished(mtm: MainThreadMarker) {
-    if !AWAIT_DONE.swap(false, Ordering::Relaxed) {
-        return;
-    }
-    let dir = PathBuf::from(std::env::var("WD40_SCREENSHOT_DIR").unwrap_or_default());
-    let appearance = std::env::var("WD40_APPEARANCE").unwrap_or_else(|_| "light".into());
-    popover::refresh(mtm);
-    popover::ensure_open(mtm);
-    save_popover(&dir.join(format!("done-{appearance}.png")), mtm);
-    eprintln!("wd-40: screenshots written to {}", dir.display());
-    objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
 }
 
 fn sequence() {
@@ -63,9 +47,47 @@ fn sequence() {
     show_screen(UiScreen::Cleaning, mtm);
     save_popover(&dir.join(format!("cleaning-{appearance}.png")), mtm);
 
-    prepare_smallest_selection();
-    AWAIT_DONE.store(true, Ordering::Relaxed);
-    tasks::spawn_clean_selected();
+    stage_done_frame();
+    show_screen(UiScreen::Done, mtm);
+    save_popover(&dir.join(format!("done-{appearance}.png")), mtm);
+
+    eprintln!("wd-40: screenshots written to {}", dir.display());
+    objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
+}
+
+/// Build the done summary from what a scan already found. Earlier this ran a
+/// real clean to reach this screen, and when its fixture was absent it fell
+/// back to deleting the smallest real target it could find — a screenshot tool
+/// must not delete anything a user owns.
+fn stage_done_frame() {
+    with_state(|state| {
+        let mut removed: Vec<crate::state::GroupSummary> = Vec::new();
+        for &group in wd40::scanner::ArtifactGroup::ALL {
+            let members: Vec<&wd40::scanner::TargetDir> =
+                state.targets.iter().filter(|td| td.kind.group() == group).collect();
+            if members.is_empty() {
+                continue;
+            }
+            removed.push(crate::state::GroupSummary {
+                group,
+                count: members.len().min(3),
+                bytes: members.iter().take(3).map(|td| td.size_bytes).sum(),
+            });
+        }
+        let freed: u64 = removed.iter().map(|g| g.bytes).sum();
+        let skipped_count = state.targets.len() - removed.iter().map(|g| g.count).sum::<usize>();
+        let disk = state.disk_stats();
+        state.done = Some(crate::state::DoneSummary {
+            freed_bytes: freed,
+            duration: Duration::from_secs(48),
+            free_before: disk.map_or(0, |d| d.free_bytes),
+            free_after: disk.map_or(0, |d| d.free_bytes.saturating_add(freed)),
+            total_bytes: disk.map_or(0, |d| d.total_bytes),
+            removed,
+            skipped_count,
+            skipped_bytes: state.targets.iter().map(|td| td.size_bytes).sum::<u64>().saturating_sub(freed),
+        });
+    });
 }
 
 fn show_screen(screen: UiScreen, mtm: MainThreadMarker) {
@@ -138,23 +160,6 @@ fn stage_mixed_group() {
     });
 }
 
-fn prepare_smallest_selection() {
-    with_state(|state| {
-        state.selected.clear();
-        // Prefer the disposable screenshot fixture so we never delete real projects.
-        let fixture = state.targets.iter().enumerate().find(|(_, td)| {
-            td.path.file_name().and_then(|n| n.to_str()) == Some("cc-target-wd40-shot")
-        });
-        if let Some((i, _)) = fixture {
-            state.selected.insert(i);
-        } else if let Some((i, _)) =
-            state.targets.iter().enumerate().filter(|(_, td)| td.size_bytes < 2_000_000).min_by_key(|(_, td)| td.size_bytes)
-        {
-            state.selected.insert(i);
-        }
-        state.cleaning = None;
-    });
-}
 
 fn save_popover(path: &Path, mtm: MainThreadMarker) {
     let Some(view) = popover::content_view(mtm) else {

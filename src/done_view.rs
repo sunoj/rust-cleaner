@@ -1,115 +1,173 @@
-// Done-summary popover body after a clean finishes.
-// Exports: `build`. Omits rebuild-time estimates the app cannot know.
-// Deps: crate::{state, theme, widgets}, wd40.
+// Done-summary popover body: the polished medal, the space actually recovered,
+// and what each group gave back. No rebuild-time estimate — nothing here can
+// know it. Exports: `build`.
+// Deps: crate::{controls, header, medal, state, theme, widgets}, objc2, wd40.
 
+use crate::controls::{filled_button, text_button};
+use crate::header::scan_size;
+use crate::medal::{medal, start_sheen, stop_sheen};
 use crate::state::{AppState, DoneSummary};
 use crate::theme::Theme;
-use crate::controls::{filled_button, text_button};
 use crate::widgets::{
-    self, add_fill, add_line, label, label_right, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
+    self, add_fill, add_line, label, label_right, label_wrap, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::sel;
-use objc2_app_kit::NSView;
-use objc2_foundation::MainThreadMarker;
-use wd40::scanner::{human_size, ArtifactGroup};
+use objc2_app_kit::{NSTextAlignment, NSTextField, NSView};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use wd40::scanner::ArtifactGroup;
 
 pub const TAG_DONE: isize = 2003;
-const FOOTER_H: f64 = 70.0;
+const DISC: f64 = 76.0;
+const HERO_H: f64 = 224.0;
+const ROW_H: f64 = 34.0;
+/// Tall enough for the longest note, which wraps to three lines at 12pt
+/// across the card's width. At 56 it clipped mid-sentence.
+const NOTE_H: f64 = 78.0;
+const FOOTER_H: f64 = 74.0;
 
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
+    stop_sheen();
     let summary = state.done.as_ref();
-    let rows = summary.map(|s| s.removed.len() + usize::from(s.skipped_count > 0)).unwrap_or(0);
-    let height = 110.0 + rows as f64 * 40.0 + FOOTER_H;
+    let rows = summary.map_or(0, |s| s.removed.len() + usize::from(s.skipped_count > 0));
+    let height = match summary {
+        Some(_) => HERO_H + rows as f64 * ROW_H + NOTE_H + FOOTER_H,
+        None => 64.0 + FOOTER_H,
+    };
     let root = widgets::root_view(height, theme.surface, mtm);
 
-    if let Some(s) = summary {
-        draw_summary(&root, height, s, theme, mtm);
+    match summary {
+        Some(s) => {
+            draw_hero(&root, height, s, theme, mtm);
+            let mut y = height - HERO_H;
+            for row in &s.removed {
+                y = draw_row(&root, y, row.count, group_label(row.group), &scan_size(row.bytes), false, theme, mtm);
+            }
+            if s.skipped_count > 0 {
+                y = draw_row(&root, y, s.skipped_count, "Left in place \u{2014} not selected", &scan_size(s.skipped_bytes), true, theme, mtm);
+            }
+            draw_note(&root, y, s, theme, mtm);
+        }
+        None => {
+            label(&root, "Nothing was removed", PAD_X, height - 44.0, CONTENT_WIDTH, 22.0, 15.0, false, theme.ink_2, false, mtm);
+        }
     }
-
-    add_line(&root, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
-    filled_button(
-        &root, "Done", PAD_X, 28.0, CONTENT_WIDTH, sel!(handleDoneAck:), target, TAG_DONE,
-        theme.ink, theme.surface, mtm,
-    );
-    text_button(
-        &root, "Rescan", PAD_X, 4.0, 60.0, sel!(handleRescan:), target, crate::scan_view::TAG_RESCAN,
-        theme.ink_2, mtm,
-    );
+    draw_footer(&root, theme, target, mtm);
     (root, height)
 }
 
-fn draw_summary(parent: &NSView, height: f64, s: &DoneSummary, theme: &Theme, mtm: MainThreadMarker) {
-    let freed = human_size(s.freed_bytes);
-    label(parent, &freed, PAD_X, height - 42.0, 160.0, 32.0, 30.0, true, theme.ink, false, mtm);
-    label(parent, "freed", PAD_X + 170.0, height - 36.0, 60.0, 20.0, 15.0, false, theme.ink_2, false, mtm);
-    let secs = s.duration.as_secs().max(1);
-    label_right(
-        parent, &format!("in {secs}s"), PAD_X + 220.0, height - 34.0, CONTENT_WIDTH - 220.0, 16.0,
-        11.5, theme.ink_3, true, mtm,
-    );
+fn draw_hero(root: &NSView, y_top: f64, s: &DoneSummary, theme: &Theme, mtm: MainThreadMarker) {
+    add_fill(root, 0.0, y_top - HERO_H, POPOVER_WIDTH, HERO_H, theme.pos, 0.05, 0.0, mtm);
+    add_fill(root, 0.0, y_top - 104.0, POPOVER_WIDTH, 104.0, theme.pos, 0.04, 0.0, mtm);
 
-    // Simple after-clean gauge: used vs free (no artifact slice).
-    if s.total_bytes > 0 {
-        let free_frac = s.free_after as f64 / s.total_bytes as f64;
-        let used_w = CONTENT_WIDTH * (1.0 - free_frac).clamp(0.0, 1.0);
-        add_fill(parent, PAD_X, height - 58.0, CONTENT_WIDTH, 7.0, theme.surface_2, 1.0, 3.5, mtm);
-        add_fill(parent, PAD_X, height - 58.0, used_w, 7.0, theme.ink_4, 1.0, 3.5, mtm);
-    }
+    let disc = medal(NSRect::new(NSPoint::new((POPOVER_WIDTH - DISC) / 2.0, y_top - 94.0), NSSize::new(DISC, DISC)), theme.dark, mtm);
+    root.addSubview(&disc);
+    start_sheen(&disc);
 
-    label(
-        parent, &format!("{} free", human_size(s.free_after)), PAD_X, height - 82.0, 160.0, 16.0,
-        13.0, false, theme.ink, false, mtm,
-    );
-    label_right(
-        parent, &format!("was {}", human_size(s.free_before)), PAD_X + 180.0, height - 82.0,
-        CONTENT_WIDTH - 180.0, 16.0, 11.5, theme.ink_3, true, mtm,
-    );
-    add_line(parent, 0.0, height - 96.0, POPOVER_WIDTH, theme.line, mtm);
+    centred(root, &format!("+{}", scan_size(s.freed_bytes)), y_top - 134.0, 32.0, true, theme.ink, mtm);
+    let caption = format!("of space back, in {}", elapsed_text(s.duration.as_secs()));
+    centred(root, &caption, y_top - 156.0, 14.0, false, theme.ink_2, mtm);
 
-    let mut y = height - 110.0;
-    for row in &s.removed {
-        y = draw_stat_row(parent, y, &row.count.to_string(), &group_label(row.group), &human_size(row.bytes), theme, false, mtm);
-    }
-    if s.skipped_count > 0 {
-        draw_stat_row(
-            parent, y, &s.skipped_count.to_string(), "Skipped \u{2014} recent",
-            &human_size(s.skipped_bytes), theme, true, mtm,
-        );
-    }
-    // No "rebuilding costs N min" card — that figure is not knowable here.
+    draw_bar(root, y_top - 182.0, s, theme, mtm);
+    label(root, &format!("{} free", scan_size(s.free_after)), PAD_X, y_top - 204.0, 180.0, 18.0, 13.0, false, theme.ink, false, mtm);
+    label_right(root, &format!("was {}", scan_size(s.free_before)), PAD_X + 180.0, y_top - 203.0, CONTENT_WIDTH - 180.0, 16.0, 11.5, theme.ink_3, true, mtm);
+    add_line(root, 0.0, y_top - HERO_H, POPOVER_WIDTH, theme.line, mtm);
 }
 
-fn group_label(group: ArtifactGroup) -> String {
-    match group {
-        ArtifactGroup::Rust => "Rust targets removed".into(),
-        ArtifactGroup::NodeModules => "Node modules removed".into(),
-        ArtifactGroup::BuildOutput => "Build output removed".into(),
-        ArtifactGroup::Caches => "Caches removed".into(),
+/// Used / just-reclaimed / already-free, straight from the volume's own before
+/// and after figures — the middle slice is exactly what this run gave back.
+fn draw_bar(root: &NSView, y: f64, s: &DoneSummary, theme: &Theme, mtm: MainThreadMarker) {
+    if s.total_bytes == 0 {
+        return;
     }
+    let scale = CONTENT_WIDTH / s.total_bytes as f64;
+    let used = (s.total_bytes.saturating_sub(s.free_after) as f64 * scale).clamp(0.0, CONTENT_WIDTH);
+    let back = (s.freed_bytes as f64 * scale).clamp(0.0, CONTENT_WIDTH - used);
+    add_fill(root, PAD_X, y, CONTENT_WIDTH, 11.0, theme.pos, 0.26, 3.0, mtm);
+    add_fill(root, PAD_X, y, used.max(0.5), 11.0, theme.ink_4, 1.0, 3.0, mtm);
+    add_fill(root, PAD_X + used, y, back.max(0.5), 11.0, theme.pos, 0.7, 0.0, mtm);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_stat_row(
-    parent: &NSView,
+fn draw_row(
+    root: &NSView,
     y_top: f64,
-    count: &str,
+    count: usize,
     title: &str,
     size: &str,
+    muted: bool,
     theme: &Theme,
-    warn: bool,
     mtm: MainThreadMarker,
 ) -> f64 {
-    let y = y_top - 40.0;
-    let bg = if warn { theme.accent_weak } else { theme.surface_2 };
-    let fg = if warn { theme.warn } else { theme.ink_2 };
-    add_fill(parent, PAD_X, y + 8.0, 22.0, 22.0, bg, 1.0, 6.0, mtm);
-    label(parent, count, PAD_X + 2.0, y + 11.0, 18.0, 16.0, 11.0, false, fg, true, mtm);
-    label(parent, title, PAD_X + 32.0, y + 12.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
+    let y = y_top - ROW_H;
+    let (chip, ink) = if muted { (theme.accent_weak, theme.warn) } else { (theme.surface_2, theme.ink_2) };
+    add_fill(root, PAD_X, y + 6.0, 22.0, 22.0, chip, 1.0, 6.0, mtm);
+    label(root, &count.to_string(), PAD_X + 2.0, y + 9.0, 18.0, 16.0, 11.0, false, ink, true, mtm);
+    label(root, title, PAD_X + 32.0, y + 9.0, 216.0, 16.0, 13.5, false, theme.ink, false, mtm);
     label_right(
-        parent, size, PAD_X + 240.0, y + 12.0, CONTENT_WIDTH - 240.0, 16.0, 13.0,
-        if warn { theme.ink_3 } else { theme.ink }, true, mtm,
+        root, size, PAD_X + 248.0, y + 9.0, CONTENT_WIDTH - 248.0, 16.0, 13.0,
+        if muted { theme.ink_3 } else { theme.ink }, true, mtm,
     );
     y
+}
+
+fn draw_note(root: &NSView, y_top: f64, s: &DoneSummary, theme: &Theme, mtm: MainThreadMarker) {
+    let card = add_fill(root, PAD_X, y_top - NOTE_H + 8.0, CONTENT_WIDTH, NOTE_H - 12.0, theme.paper, 1.0, 8.0, mtm);
+    card.setBorderWidth(1.0);
+    card.setBorderColor(&Theme::color(theme.line));
+    let text = match s.skipped_count {
+        0 => "Everything removed is gone for good \u{2014} nothing went to the Trash.".to_string(),
+        1 => "One target outside your selection was left untouched. Everything removed is gone for good \u{2014} nothing went to the Trash.".to_string(),
+        n => format!("{n} targets outside your selection were left untouched. Everything removed is gone for good \u{2014} nothing went to the Trash."),
+    };
+    label_wrap(root, &text, PAD_X + 12.0, y_top - NOTE_H + 14.0, CONTENT_WIDTH - 24.0, NOTE_H - 24.0, 12.0, theme.ink_2, mtm);
+}
+
+fn draw_footer(root: &NSView, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) {
+    add_line(root, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
+    filled_button(root, "Done", PAD_X, 30.0, CONTENT_WIDTH, sel!(handleDoneAck:), target, TAG_DONE, theme.ink, theme.surface, mtm);
+    text_button(root, "Rescan", PAD_X, 6.0, 60.0, sel!(handleRescan:), target, crate::scan_view::TAG_RESCAN, theme.ink_2, mtm);
+}
+
+fn centred(
+    root: &NSView,
+    text: &str,
+    y: f64,
+    size: f64,
+    bold: bool,
+    color: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    let field = label(root, text, PAD_X, y, CONTENT_WIDTH, size + 8.0, size, bold, color, false, mtm);
+    field.setAlignment(NSTextAlignment::Center);
+    field
+}
+
+fn elapsed_text(seconds: u64) -> String {
+    match seconds {
+        0..=89 => format!("{}s", seconds.max(1)),
+        _ => format!("{}m {}s", seconds / 60, seconds % 60),
+    }
+}
+
+fn group_label(group: ArtifactGroup) -> &'static str {
+    match group {
+        ArtifactGroup::Rust => "Rust targets",
+        ArtifactGroup::NodeModules => "node_modules",
+        ArtifactGroup::BuildOutput => "Build output",
+        ArtifactGroup::Caches => "Caches",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::elapsed_text;
+
+    #[test]
+    fn elapsed_reads_in_seconds_then_minutes() {
+        assert_eq!(elapsed_text(0), "1s");
+        assert_eq!(elapsed_text(48), "48s");
+        assert_eq!(elapsed_text(192), "3m 12s");
+    }
 }

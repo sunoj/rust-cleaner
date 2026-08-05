@@ -191,8 +191,6 @@ pub fn on_clean_done(mtm: MainThreadMarker) {
         state.screen = UiScreen::Done;
     });
     popover::refresh(mtm);
-    #[cfg(debug_assertions)]
-    crate::screenshot::on_clean_finished(mtm);
 }
 
 pub fn start_auto_scan() {

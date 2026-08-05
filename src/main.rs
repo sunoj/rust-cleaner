@@ -11,8 +11,11 @@ mod done_view;
 mod header;
 mod hover_row;
 mod icon;
+mod medal;
 mod menu_rows;
+mod metal;
 mod names;
+mod plate;
 mod popover;
 mod scan_view;
 #[cfg(debug_assertions)]
@@ -24,6 +27,7 @@ mod style;
 mod tasks;
 mod tasks_clean;
 mod theme;
+mod treemap;
 mod updater;
 mod widgets;
 
