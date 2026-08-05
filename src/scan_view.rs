@@ -201,11 +201,13 @@ fn draw_row(
     let y = y_top - ROW_H;
     let row = hover_row(parent, y, ROW_H, theme.surface_2, mtm);
     let frac = td.size_bytes as f64 / max_size as f64;
-    // Size bars for every row (mock), not only the checked ones.
+    // Full row height, not inset. The mock insets it because nothing else sits
+    // behind the row; here the hover tint does, and a shorter wash on top of it
+    // banded every row into three tones.
     if !sizing {
-        add_size_wash(&row, 0.0, 4.0, POPOVER_WIDTH, ROW_H - 8.0, frac, theme, mtm);
+        add_size_wash(&row, 0.0, 0.0, POPOVER_WIDTH, ROW_H, frac, theme, mtm);
     }
-    checkbox(&row, on, PAD_X, 12.0, sel!(handleToggleItem:), target, TAG_ITEM_BASE + index as isize, theme, mtm);
+    checkbox(&row, on, PAD_X, 13.0, sel!(handleToggleItem:), target, TAG_ITEM_BASE + index as isize, theme, mtm);
     label(&row, name, PAD_X + 26.0, 18.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
     let meta = if td.kind.group() == ArtifactGroup::Caches {
         format!("{} \u{00b7} network downloads to rebuild", td.kind.label())

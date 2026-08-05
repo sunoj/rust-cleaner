@@ -17,20 +17,29 @@ const VIEW_H: f64 = 396.0;
 /// on the right. Pad the canvas so nothing is shaved off.
 const PAD: f64 = 22.0;
 
-/// The can from the icon design, as a template image. It carries no colour of
-/// its own — macOS tints it with the menu bar, which is what the design asks
-/// for; artifact weight is still signalled by the tinted size beside it.
+/// The can from the icon design, tinted by artifact weight so the glyph and the
+/// size beside it always read as one colour.
+///
+/// Below the first rust step the tint is `labelColor`, which only tracks the
+/// menu bar correctly if AppKit resolves it at draw time — so there the glyph
+/// stays a template and macOS colours it. Once there is a rust tint to show,
+/// the colour is baked in and the template flag comes off.
 #[allow(deprecated)]
-pub fn rusty_icon(_total_bytes: u64) -> Option<Retained<NSImage>> {
+pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
     let scale = GLYPH_H / (VIEW_H + PAD * 2.0);
     let size = NSSize::new((VIEW_W + PAD * 2.0) * scale, GLYPH_H);
     let image = NSImage::initWithSize(NSImage::alloc(), size);
     let map = |x: f64, y: f64| {
         NSPoint::new((x - VIEW_X + PAD) * scale, GLYPH_H - (y - VIEW_Y + PAD) * scale)
     };
+    let rusted = total_bytes / (1024 * 1024 * 1024) >= 5;
 
     image.lockFocus();
-    NSColor::blackColor().setStroke();
+    if rusted {
+        rust_text_color(total_bytes).setStroke();
+    } else {
+        NSColor::blackColor().setStroke();
+    }
 
     // The straw: across the top, then down the left side.
     let straw = NSBezierPath::new();
