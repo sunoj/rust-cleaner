@@ -4,9 +4,16 @@
 
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
-use wd40::scanner::TargetDir;
+use wd40::scanner::{ArtifactGroup, TargetDir};
 
 const SECONDS_PER_DAY: u64 = 86_400;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GroupSelection {
+    Off,
+    Mixed,
+    On,
+}
 
 /// True when the artifact is newer than `max_age_days` (still "recent").
 pub fn is_recent(target: &TargetDir, max_age_days: u64) -> bool {
@@ -34,6 +41,39 @@ pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
         .fold(0_u64, |sum, n| sum.saturating_add(n))
 }
 
+pub fn group_selection(
+    targets: &[TargetDir],
+    selected: &HashSet<usize>,
+    group: ArtifactGroup,
+) -> GroupSelection {
+    let indices = targets.iter().enumerate().filter(|(_, target)| target.kind.group() == group);
+    let (count, selected_count) = indices.fold((0, 0), |(count, selected_count), (index, _)| {
+        (count + 1, selected_count + usize::from(selected.contains(&index)))
+    });
+    match selected_count {
+        0 => GroupSelection::Off,
+        selected_count if selected_count == count => GroupSelection::On,
+        _ => GroupSelection::Mixed,
+    }
+}
+
+pub fn toggle_group(targets: &[TargetDir], selected: &mut HashSet<usize>, group: ArtifactGroup) {
+    let indices: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| target.kind.group() == group)
+        .map(|(index, _)| index)
+        .collect();
+    let clear = indices.iter().all(|index| selected.contains(index));
+    for index in indices {
+        if clear {
+            selected.remove(&index);
+        } else {
+            selected.insert(index);
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub fn age_days(target: &TargetDir) -> u64 {
     SystemTime::now()
@@ -44,10 +84,11 @@ pub fn age_days(target: &TargetDir) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_selection, is_recent};
+    use super::{default_selection, group_selection, is_recent, toggle_group, GroupSelection};
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
-    use wd40::scanner::{ArtifactKind, TargetDir};
+    use wd40::scanner::{ArtifactGroup, ArtifactKind, TargetDir};
 
     fn target(age_days: u64) -> TargetDir {
         TargetDir {
@@ -66,5 +107,16 @@ mod tests {
         assert!(selected.contains(&1));
         assert!(is_recent(&targets[0], 3));
         assert!(!is_recent(&targets[1], 3));
+    }
+
+    #[test]
+    fn group_toggle_selects_all_then_clears_all() {
+        let targets = vec![target(1), target(10)];
+        let mut selected = HashSet::from([0]);
+        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::Mixed);
+        toggle_group(&targets, &mut selected, ArtifactGroup::Rust);
+        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::On);
+        toggle_group(&targets, &mut selected, ArtifactGroup::Rust);
+        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::Off);
     }
 }

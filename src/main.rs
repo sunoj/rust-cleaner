@@ -59,6 +59,14 @@ define_class!(
             actions::toggle_item(sender.tag(), self.mtm());
         }
 
+        #[unsafe(method(handleToggleGroup:))]
+        fn handle_toggle_group(&self, sender: &NSButton) {
+            let index = (sender.tag() - scan_view::TAG_GROUP_BASE) as usize;
+            let Some(&group) = wd40::scanner::ArtifactGroup::ALL.get(index) else { return };
+            with_state(|state| selection::toggle_group(&state.targets, &mut state.selected, group));
+            popover::refresh(self.mtm());
+        }
+
         #[unsafe(method(handleCleanSelected:))]
         fn handle_clean_selected(&self, _sender: &AnyObject) {
             tasks::spawn_clean_selected();

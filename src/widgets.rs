@@ -5,20 +5,25 @@
 use crate::theme::Theme;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
-use objc2_app_kit::{NSBox, NSBoxType, NSFont, NSLineBreakMode, NSTextAlignment, NSTextField, NSView};
+use objc2_app_kit::{
+    NSBox, NSBoxType, NSFont, NSLineBreakMode, NSTextAlignment, NSTextField, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
 pub const POPOVER_WIDTH: f64 = 380.0;
 pub const PAD_X: f64 = 16.0;
 pub const CONTENT_WIDTH: f64 = POPOVER_WIDTH - PAD_X * 2.0;
 
-pub fn root_view(height: f64, fill: (f64, f64, f64), mtm: MainThreadMarker) -> Retained<NSView> {
-    let view = NSView::initWithFrame(
-        NSView::alloc(mtm),
+pub fn root_view(height: f64, _fill: (f64, f64, f64), mtm: MainThreadMarker) -> Retained<NSView> {
+    let view = NSVisualEffectView::initWithFrame(
+        NSVisualEffectView::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(POPOVER_WIDTH, height)),
     );
-    add_fill(&view, 0.0, 0.0, POPOVER_WIDTH, height, fill, 1.0, 0.0, mtm);
-    view
+    view.setMaterial(NSVisualEffectMaterial::Popover);
+    view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    view.setState(NSVisualEffectState::Active);
+    view.into_super()
 }
 
 #[allow(clippy::too_many_arguments)]

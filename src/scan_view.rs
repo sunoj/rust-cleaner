@@ -5,7 +5,7 @@
 use crate::header::{self, HeaderModel};
 use crate::menu_rows::plan_groups;
 use crate::names::{age_short, display_names};
-use crate::selection::is_recent;
+use crate::selection::{group_selection, GroupSelection, is_recent};
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::controls::{checkbox, filled_button, set_cmd_key, text_button_hint};
@@ -25,6 +25,7 @@ pub const TAG_RESCAN: isize = 2001;
 pub const TAG_SETTINGS: isize = 2002;
 pub const TAG_SHOW_MORE: isize = 2006;
 pub const TAG_ITEM_BASE: isize = 1000;
+pub const TAG_GROUP_BASE: isize = 3000;
 
 const ROW_H: f64 = 40.0;
 /// Match the mock: show the largest few, offer a link for the rest.
@@ -80,7 +81,7 @@ fn draw_list(
         if y <= list_bottom + ROW_H {
             break;
         }
-        y = draw_group_header(root, y, plan.group, plan.count, plan.size, sizing, theme, mtm);
+        y = draw_group_header(root, state, y, plan.group, plan.count, plan.size, sizing, theme, target, mtm);
         for row in &plan.rows {
             if y <= list_bottom + ROW_H {
                 break;
@@ -153,22 +154,33 @@ fn measure_list(plans: &[crate::menu_rows::GroupPlan<'_>]) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn draw_group_header(
     parent: &NSView,
+    state: &AppState,
     y_top: f64,
     group: ArtifactGroup,
     count: usize,
     size: u64,
     sizing: bool,
     theme: &Theme,
+    target: &AnyObject,
     mtm: MainThreadMarker,
 ) -> f64 {
     let y = y_top - 24.0;
+    let selection = group_selection(&state.targets, &state.selected, group);
+    let group_index = ArtifactGroup::ALL.iter().position(|candidate| *candidate == group).unwrap_or(0);
+    checkbox(
+        parent, selection == GroupSelection::On, PAD_X, y - 1.0, sel!(handleToggleGroup:),
+        target, TAG_GROUP_BASE + group_index as isize, theme, mtm,
+    );
+    if selection == GroupSelection::Mixed {
+        widgets::add_fill(parent, PAD_X + 3.0, y + 5.0, 9.0, 2.0, theme.ink, 1.0, 1.0, mtm);
+    }
     let title = match group {
         ArtifactGroup::Rust => "rust targets",
         ArtifactGroup::NodeModules => "node modules",
         ArtifactGroup::BuildOutput => "build output",
     };
-    label(parent, title, PAD_X, y, 160.0, 14.0, 11.5, false, theme.ink_3, true, mtm);
-    label(parent, &count.to_string(), PAD_X + 130.0, y, 30.0, 14.0, 10.5, false, theme.ink_3, true, mtm);
+    label(parent, title, PAD_X + 26.0, y, 134.0, 14.0, 11.5, false, theme.ink_3, true, mtm);
+    label(parent, &count.to_string(), PAD_X + 156.0, y, 30.0, 14.0, 10.5, false, theme.ink_3, true, mtm);
     if !sizing {
         label_right(
             parent, &human_size(size), PAD_X + 180.0, y, CONTENT_WIDTH - 180.0, 14.0, 12.0,
@@ -225,8 +237,6 @@ fn draw_footer(
     target: &AnyObject,
     mtm: MainThreadMarker,
 ) {
-    use crate::widgets::add_fill;
-    add_fill(parent, 0.0, 0.0, POPOVER_WIDTH, FOOTER_H, theme.surface, 1.0, 0.0, mtm);
     add_line(parent, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
     let (title, fill, ink) = clean_cta(state, sizing, theme);
     filled_button(

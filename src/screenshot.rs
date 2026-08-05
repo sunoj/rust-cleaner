@@ -13,6 +13,7 @@ use objc2_foundation::{MainThreadMarker, NSDictionary, NSString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use wd40::scanner::ArtifactGroup;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 static AWAIT_DONE: AtomicBool = AtomicBool::new(false);
@@ -51,6 +52,7 @@ fn sequence() {
     let _ = std::fs::create_dir_all(&dir);
     let appearance = std::env::var("WD40_APPEARANCE").unwrap_or_else(|_| "light".into());
 
+    stage_mixed_group();
     show_screen(UiScreen::Scan, mtm);
     save_popover(&dir.join(format!("scan-{appearance}.png")), mtm);
 
@@ -114,6 +116,25 @@ fn stage_cleaning_frame() {
             done_count,
             total_count,
         });
+    });
+}
+
+fn stage_mixed_group() {
+    with_state(|state| {
+        for &group in ArtifactGroup::ALL {
+            let indices: Vec<usize> = state.targets.iter().enumerate()
+                .filter(|(_, target)| target.kind.group() == group)
+                .map(|(index, _)| index)
+                .collect();
+            if indices.len() < 2 {
+                continue;
+            }
+            for index in &indices {
+                state.selected.remove(index);
+            }
+            state.selected.insert(indices[0]);
+            break;
+        }
     });
 }
 
