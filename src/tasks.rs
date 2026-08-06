@@ -185,7 +185,14 @@ fn start_reclaim() {
 /// The accounting is in: totals stop being a sum and start being a promise.
 pub fn on_reclaim_done(mtm: MainThreadMarker) {
     let Some(found) = RECLAIM_RESULT.lock().unwrap().take() else { return };
-    with_state(|state| state.reclaim = Some(found));
+    with_state(|state| {
+        // Printed because the difference between these two numbers is the whole
+        // point of the pass, and a run where it never lands looks from outside
+        // exactly like one where the disk really does hold that much.
+        let summed = wd40::scanner::human_size(state.total_size());
+        state.reclaim = Some(found);
+        println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
+    });
     popover::refresh(mtm);
     popover::refresh_status(mtm);
 }

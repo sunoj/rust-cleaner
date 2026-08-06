@@ -11,8 +11,13 @@ use crate::scanner::TargetDir;
 /// Device-byte accounting across the whole target list.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Reclaim {
-    /// Target index behind each owner in `attribution`, in owner order.
-    owners: Vec<usize>,
+    /// The directory behind each owner in `attribution`, in owner order.
+    ///
+    /// By path, never by index. The pass takes minutes on a busy machine and
+    /// the target list moves underneath it — a scan that dropped two targets
+    /// used to invalidate the whole accounting, so the figure never once
+    /// reached the screen and the headline stayed a sum.
+    owners: Vec<std::path::PathBuf>,
     attribution: Attribution,
 }
 
@@ -33,7 +38,8 @@ impl Reclaim {
         if targets.is_empty() {
             return None;
         }
-        let owners: Vec<usize> = (0..targets.len()).collect();
+        let owners: Vec<std::path::PathBuf> =
+            targets.iter().map(|target| target.path.clone()).collect();
         let fingerprint = fingerprint(targets);
         // Seventy seconds of syscalls is worth going a long way to avoid, and
         // the fingerprint says whether the answer would even differ.
@@ -73,16 +79,19 @@ impl Reclaim {
     /// over-promised while the next accounting is still running.
     pub fn bytes(&self, targets: &[TargetDir], selected: &impl Fn(usize) -> bool) -> u64 {
         let mut going = vec![false; self.owners.len()];
-        for (owner, index) in self.owners.iter().enumerate() {
-            going[owner] = selected(*index);
+        let mut unknown: u64 = 0;
+        for (index, target) in targets.iter().enumerate() {
+            if !selected(index) {
+                continue;
+            }
+            match self.owners.iter().position(|owner| *owner == target.path) {
+                Some(owner) => going[owner] = true,
+                // A target found since the accounting was made. Its own figure
+                // is the best that can be said about it until the next pass.
+                None => unknown = unknown.saturating_add(target.size_bytes),
+            }
         }
-        let shared = self.attribution.union_of(&going);
-        targets
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| selected(*index) && !self.owners.contains(index))
-            .map(|(_, target)| target.size_bytes)
-            .fold(shared, u64::saturating_add)
+        self.attribution.union_of(&going).saturating_add(unknown)
     }
 
     /// What the whole list occupies on the device.
@@ -90,11 +99,13 @@ impl Reclaim {
         self.bytes(targets, &|_| true)
     }
 
-    /// True while this accounting still describes the rows on screen. A rescan
-    /// that added or dropped a target invalidates the owner indices, and a
-    /// stale promise is worse than a conservative one.
+    /// True while this accounting still says something about what is on screen.
+    /// Being keyed by path, it survives a rescan that added or dropped targets
+    /// — only one that replaced every last one of them is worthless.
     pub fn covers(&self, targets: &[TargetDir]) -> bool {
-        self.owners.len() == targets.len()
+        targets
+            .iter()
+            .any(|target| self.owners.iter().any(|owner| *owner == target.path))
     }
 }
 
@@ -114,6 +125,38 @@ mod tests {
         let path = std::env::temp_dir().join(format!("wd40-reclaim-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         path
+    }
+
+    /// The bug this replaced: the accounting was keyed by index and thrown
+    /// away whenever a scan changed the target count. On a machine where a
+    /// build finishes every few minutes that was always, so the exact figure
+    /// never once reached the screen. Keyed by path, what it knows survives.
+    #[test]
+    fn a_rescan_that_moved_the_targets_does_not_throw_the_accounting_away() {
+        let root = scratch("moved");
+        let kept = root.join("kept");
+        let _ = std::fs::create_dir_all(&kept);
+        let _ = std::fs::write(kept.join("payload.bin"), vec![b'x'; 1 << 20]);
+
+        let before = vec![target(kept.clone(), 1 << 20)];
+        let found = Reclaim::measure(&before).expect("one target");
+
+        // A later scan dropped one target and found two new ones; `kept` moved
+        // to the end of the list.
+        let after = vec![
+            target(root.join("fresh-a"), 4096),
+            target(root.join("fresh-b"), 8192),
+            target(kept, 1 << 20),
+        ];
+        assert!(found.covers(&after), "it still describes one of these rows");
+
+        // The two it never saw contribute their own figures; the one it did is
+        // answered from the device.
+        let all = found.bytes(&after, &|_| true);
+        assert!(all >= 4096 + 8192, "the new targets still count: {all}");
+        let new_only = found.bytes(&after, &|index| index < 2);
+        assert_eq!(new_only, 4096 + 8192, "targets it never saw count in full");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
