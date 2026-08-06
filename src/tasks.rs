@@ -42,8 +42,6 @@ static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
-/// The target list the last finished accounting was made from.
-static LAST_RECLAIM: Mutex<Option<Vec<(std::path::PathBuf, u64)>>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
 /// The finished summary, waiting for the cleaning screen to have been up long
 /// enough to have been read.
@@ -174,28 +172,14 @@ fn start_reclaim() {
     if targets.is_empty() {
         return;
     }
-    let fingerprint = reclaim_fingerprint(&targets);
-    if *LAST_RECLAIM.lock().unwrap() == Some(fingerprint.clone()) {
-        return;
-    }
     std::thread::spawn(move || {
-        let found = wd40::reclaim::Reclaim::measure(&targets);
-        // Recorded only once the pass is through, so a run that dies leaves the
-        // next scan to try again rather than skipping for ever.
-        *LAST_RECLAIM.lock().unwrap() = found.is_some().then_some(fingerprint);
-        *RECLAIM_RESULT.lock().unwrap() = found;
+        // `measure` answers from the two-level store when the same directories
+        // come back at the same sizes, so this is free far more often than it
+        // is expensive — including on the first scan after a restart.
+        *RECLAIM_RESULT.lock().unwrap() = wd40::reclaim::Reclaim::measure(&targets);
+        wd40::cache::flush();
         dispatch_to_main(crate::mainthread::reclaim_done_trampoline);
     });
-}
-
-/// What the accounting depends on: which directories, and how big each is. A
-/// build that changed a target's size changes this; a rescan that found the
-/// same thing twice does not.
-fn reclaim_fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
-    targets
-        .iter()
-        .map(|target| (target.path.clone(), target.size_bytes))
-        .collect()
 }
 
 /// The accounting is in: totals stop being a sum and start being a promise.

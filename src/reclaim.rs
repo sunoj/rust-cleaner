@@ -5,10 +5,11 @@
 // Exports: `Reclaim`.
 // Deps: std, crate::{extents, scanner}.
 
-use crate::extents::{attribute, Attribution};
+use crate::extents::Attribution;
 use crate::scanner::TargetDir;
 
 /// Device-byte accounting across the whole target list.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Reclaim {
     /// Target index behind each owner in `attribution`, in owner order.
     owners: Vec<usize>,
@@ -33,9 +34,35 @@ impl Reclaim {
             return None;
         }
         let owners: Vec<usize> = (0..targets.len()).collect();
-        let paths: Vec<std::path::PathBuf> =
-            targets.iter().map(|target| target.path.clone()).collect();
-        Some(Self { owners, attribution: attribute(&paths) })
+        let fingerprint = fingerprint(targets);
+        // Seventy seconds of syscalls is worth going a long way to avoid, and
+        // the fingerprint says whether the answer would even differ.
+        if let Some(kept) = crate::cache::attribution_for(&fingerprint) {
+            return Some(Self { owners, attribution: kept });
+        }
+        // Per target: an unchanged one is answered from level one, and only
+        // what a build actually touched is read again. On a machine where two
+        // of thirty targets move between scans, that is two reads instead of
+        // thirty.
+        let per_target: Vec<crate::extents::TargetExtents> = targets
+            .iter()
+            .map(|target| match crate::extent_cache::extents_of(&target.path, target.size_bytes) {
+                Some(kept) => kept,
+                None => {
+                    let read = crate::extents::read_target(&target.path);
+                    crate::extent_cache::put_extents(&target.path, target.size_bytes, read.clone());
+                    read
+                }
+            })
+            .collect();
+        let attribution = crate::extents::combine(&per_target);
+        crate::cache::put_attribution(&fingerprint, attribution.clone());
+        Some(Self { owners, attribution })
+    }
+
+    /// What the accounting depends on: which directories, and how big each is.
+    pub fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
+        fingerprint(targets)
     }
 
     /// Bytes removing `selected` would return: the shared set measured against
@@ -126,4 +153,8 @@ mod tests {
         assert!(found.bytes(&targets, &|_| true) >= four_mb);
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
+    targets.iter().map(|target| (target.path.clone(), target.size_bytes)).collect()
 }

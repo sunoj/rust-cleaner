@@ -4,7 +4,7 @@
 // once per copy. Unioning extents counts them once, which is what deleting
 // them returns. See docs/apfs-clone-overcount.md.
 // Exports: `Attribution`, `attribute`.
-// Deps: std, libc, walkdir.
+// Deps: std, libc, serde, walkdir.
 
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
@@ -15,10 +15,9 @@ use std::path::{Path, PathBuf};
 /// fields are in/out: bytes into the file going in, bytes into the device
 /// coming back.
 ///
-/// The header wraps this in `#pragma pack(4)`, so it is 20 bytes with the
-/// offsets at 4 and 12 — not the 24 that natural alignment would give. A plain
-/// `repr(C)` here reads the length field off the end of the offset and returns
-/// numbers in the exabytes.
+/// The header wraps this in `#pragma pack(4)`: 20 bytes, offsets at 4 and 12,
+/// not the 24 natural alignment would give. A plain `repr(C)` reads the length
+/// off the end of the offset and returns extents in the exabytes.
 #[repr(C, packed(4))]
 struct Log2Phys {
     flags: libc::c_uint,
@@ -35,6 +34,7 @@ struct Ref {
 
 /// What a set of roots occupies on the device, split so that a later question
 /// about any subset can be answered without walking the disk again.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Attribution {
     /// Device bytes only this root refers to. Freed whenever it is removed.
     exclusive: Vec<u64>,
@@ -81,18 +81,49 @@ impl Attribution {
     }
 }
 
-/// Read the extent map of every file under `roots` and work out who holds what.
-pub fn attribute(roots: &[PathBuf]) -> Attribution {
+/// One target's extent map, read on its own so it can be kept on its own. The
+/// sweep that decides who shares what needs every target at once; *reading*
+/// does not — and reading is the part that costs minutes on a busy machine.
+#[derive(Clone)]
+pub struct TargetExtents {
+    runs: Vec<(u64, u64)>,
+    /// Allocated bytes of files with no readable extent map. They belong to
+    /// this target alone.
+    unmapped: u64,
+}
+
+/// Read one target. Nothing here depends on any other target, which is what
+/// lets an unchanged one be answered without touching the disk.
+pub fn read_target(root: &Path) -> TargetExtents {
     // One `open` and a few `fcntl`s per file is a lot of syscalls; take them at
     // a priority that yields the disk to whatever the user is running.
     crate::qos::background();
     let mut refs: Vec<Ref> = Vec::new();
-    let mut exclusive = vec![0_u64; roots.len()];
-    for (owner, root) in roots.iter().enumerate() {
-        collect_root(root, owner as u32, &mut refs, &mut exclusive[owner]);
+    let mut unmapped = 0_u64;
+    collect_root(root, 0, &mut refs, &mut unmapped);
+    TargetExtents {
+        runs: refs.into_iter().map(|reference| (reference.offset, reference.len)).collect(),
+        unmapped,
+    }
+}
+
+/// Work out who holds what, from extent maps however they were come by.
+pub fn combine(per_target: &[TargetExtents]) -> Attribution {
+    let mut refs: Vec<Ref> = Vec::new();
+    let mut exclusive: Vec<u64> = per_target.iter().map(|target| target.unmapped).collect();
+    for (owner, target) in per_target.iter().enumerate() {
+        for (offset, len) in &target.runs {
+            refs.push(Ref { offset: *offset, len: *len, owner: owner as u32 });
+        }
     }
     let shared = sweep(&mut refs, &mut exclusive);
     Attribution { exclusive, shared }
+}
+
+/// Read every root and combine them — the path taken when nothing is kept.
+pub fn attribute(roots: &[PathBuf]) -> Attribution {
+    let per_target: Vec<TargetExtents> = roots.iter().map(|root| read_target(root)).collect();
+    combine(&per_target)
 }
 
 /// Walk one root, mapping each file. A file whose extents cannot be read at all

@@ -267,6 +267,9 @@ fn main() {
     }
 
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+    // Level two first: the scan that starts a moment from now is the one it
+    // exists to spare.
+    wd40::cache::load();
     let config = Config::load();
     let auto_hours = config.auto_clean_hours;
 

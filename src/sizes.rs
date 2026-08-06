@@ -7,7 +7,7 @@
 use crate::disk::disk_space;
 use crate::nesting::Publisher;
 use crate::scanner::TargetDir;
-use crate::size_cache;
+use crate::cache;
 use crate::walk::Walk;
 use getattrlistbulk::{DirReader, ObjectType, RequestedAttributes};
 use std::os::unix::fs::MetadataExt;
@@ -48,10 +48,10 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
     // a target enclosing one of them still settles correctly.
     let known: Vec<bool> = targets
         .iter()
-        .map(|target| size_cache::remembered(&target.path, target.kind).is_some())
+        .map(|target| cache::size_of(&target.path, target.kind).is_some())
         .collect();
     for (index, target) in targets.iter().enumerate() {
-        let Some(bytes) = size_cache::remembered(&target.path, target.kind) else { continue };
+        let Some(bytes) = cache::size_of(&target.path, target.kind) else { continue };
         let settled = publisher.lock().unwrap().record(index, bytes);
         for (index, bytes) in settled {
             on_size(SizedTarget { index, bytes });
@@ -61,7 +61,7 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
     let walk = Walk::new(&paths, &known);
     let remember = |sized: SizedTarget| {
         if let Some(target) = targets.get(sized.index) {
-            size_cache::remember(&target.path, target.kind, sized.bytes);
+            cache::put_size(&target.path, target.kind, sized.bytes);
         }
         on_size(sized);
     };

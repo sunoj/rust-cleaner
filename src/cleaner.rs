@@ -52,7 +52,7 @@ pub fn remove_target(target: &TargetDir) -> Removal {
     if target.path.is_symlink() || !target.path.is_dir() {
         return Removal::Refused("path changed since scan (symlink or missing)".into());
     }
-    crate::size_cache::forget(&target.path);
+    crate::cache::forget(&target.path);
     match target.kind {
         ArtifactKind::Toolchain => settle(target, crate::toolchains::uninstall(&target.path).err()),
         _ => settle(target, fs::remove_dir_all(&target.path).err().map(|err| err.to_string())),
