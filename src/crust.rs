@@ -1,36 +1,22 @@
-// The rust crust: how much of the plate it may cover for a given job, how it is
-// painted, and how it reads underneath. Kept apart from the plate view because
-// this is the part that has to be true to scale and true to the job — the
-// legend quotes the same figures this sizes the region from.
-// Exports: `crust_region`, `paint_plate`, `plate_edge`, `legend_text`, `phase`.
-// Deps: crate::{header, metal, spray, state, treemap, widgets}, objc2 AppKit.
+// The rust crust: how much of the plate it may cover for a given job, and how
+// it is painted — the patch per target, and how the whole of it thins as the
+// job takes bytes off the disk. Kept apart from the plate view because this is
+// the part that has to be true to scale and true to the job.
+// Exports: `crust_region`, `paint_plate`, `plate_edge`, `PLATE_H`.
+// Deps: crate::{legend, metal, spray, treemap, widgets}, objc2 AppKit.
 
-use crate::header::scan_size;
-use crate::metal::{brushed, inset, outline, rings, rnd};
+use crate::metal::{brushed, grey, inset, outline, rings, rnd};
 use crate::spray::draw_film;
-use crate::state::CleanProgress;
-use crate::treemap::{rust_tone, Tile, ACTIVE, BLOCKED, DONE, PART_GONE, SKIPPED};
+use crate::treemap::{rust_tone, Tile, ACTIVE, DONE, PENDING};
 use crate::widgets::CONTENT_WIDTH;
 use objc2_app_kit::{NSBezierPath, NSColor};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
-use wd40::disk::DiskSpace;
+use wd40::disk::{sum_bytes, DiskSpace};
 
 /// Height of the plate the crust is measured against.
 pub const PLATE_H: f64 = 190.0;
 /// Smallest crust worth drawing: below this a tile cannot be seen or hit.
 const MIN_CRUST: f64 = 26.0;
-
-/// How a tile's state reads in the legend.
-pub fn phase(state: u8) -> &'static str {
-    match state {
-        DONE => "removed",
-        ACTIVE => "removing",
-        SKIPPED => "left in place",
-        PART_GONE => "partly removed \u{2014} the rest is still there",
-        BLOCKED => "could not be removed",
-        _ => "waiting",
-    }
-}
 
 /// How much of the plate the crust may cover: the share of the whole volume
 /// these targets occupy, so a nearly clean disk shows a nearly clean plate. The
@@ -66,17 +52,36 @@ fn share_text(fraction: f64) -> String {
 }
 
 /// Everything under the spray: brushed steel, its turning marks, the residue
-/// film over ground that is really clear, and a patch of crust for every target
-/// still on disk.
-pub fn paint_plate(bounds: NSRect, dark: bool, tiles: &[Tile]) {
+/// film over ground that is really clear, a patch of crust for every target
+/// still on disk, and a ring round the one the pointer is on.
+pub fn paint_plate(bounds: NSRect, dark: bool, tiles: &[Tile], hover: isize) {
     NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 10.0, 10.0).addClip();
     brushed(bounds, dark);
     let centre = NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0);
     rings(centre, bounds.size.height * 0.44, dark);
     draw_film(bounds, tiles);
+    let lift = lifted(tiles);
     for (index, tile) in tiles.iter().enumerate() {
-        draw_tile(index, tile);
+        draw_tile(index, tile, lift);
     }
+    if let Some(tile) = usize::try_from(hover).ok().and_then(|at| tiles.get(at)) {
+        grey(1.0, 0.8).setStroke();
+        outline(inset(tile.rect, 1.0), 1.5);
+    }
+}
+
+/// How much of this job's crust has really gone, by bytes. What is left is
+/// drawn thinner by it, so the plate reads as lifting rather than as tiles
+/// blinking out one at a time. The figure is the tiles' own sizes against the
+/// ones whose targets are gone — no clock and no animation feeds it, and no
+/// tile clears until its own target has really been removed.
+fn lifted(tiles: &[Tile]) -> f64 {
+    let total = sum_bytes(tiles.iter().map(|tile| tile.size));
+    if total == 0 {
+        return 0.0;
+    }
+    let gone = sum_bytes(tiles.iter().filter(|tile| tile.state == DONE).map(|tile| tile.size));
+    (gone as f64 / total as f64).clamp(0.0, 1.0)
 }
 
 /// The plate's edge, drawn last so nothing thrown across it paints over it.
@@ -87,31 +92,19 @@ pub fn plate_edge(bounds: NSRect) {
     edge.stroke();
 }
 
-/// What the line under the plate says: the tile the pointer is on, or the run's
-/// own figures when it is on none of them.
-pub fn legend_text(tiles: &[Tile], hover: isize, idle: &str) -> String {
-    match usize::try_from(hover).ok().and_then(|index| tiles.get(index)) {
-        Some(tile) => {
-            format!("{} \u{00b7} {} \u{00b7} {}", tile.name, scan_size(tile.size), phase(tile.state))
-        }
-        None => idle.to_string(),
-    }
-}
-
-/// The same line with nothing under the pointer: the share of the volume this
-/// job is, and how much of it has really gone.
-pub fn idle_text(share: &str, progress: &CleanProgress) -> String {
-    format!("{share} \u{00b7} {}/{} clear", progress.done_count, progress.total_count)
-}
-
-/// Crust still on disk. Cleared tiles are drawn by the residue film instead.
-pub fn draw_tile(index: usize, tile: &Tile) {
+/// Crust still on disk, thinned by how much of the job has come off. Cleared
+/// tiles are drawn by the residue film instead.
+fn draw_tile(index: usize, tile: &Tile, lift: f64) {
     if tile.state == DONE || tile.rect.size.width < 0.5 {
         return;
     }
     // Skipped, partly removed and blocked tiles are all still on the plate,
-    // and are dimmed so they do not read as work still queued.
-    let alpha = if tile.state == ACTIVE || tile.state == 0 { 1.0 } else { 0.5 };
+    // and are dimmed so they do not read as work still queued. They are not
+    // lifted with the rest: nothing more is coming off them.
+    let alpha = match tile.state == ACTIVE || tile.state == PENDING {
+        true => 1.0 - 0.55 * lift,
+        false => 0.5,
+    };
     let (r, g, b) = rust_tone(index);
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, alpha).setFill();
     NSBezierPath::fillRect(tile.rect);
@@ -134,12 +127,31 @@ pub fn draw_tile(index: usize, tile: &Tile) {
 
 #[cfg(test)]
 mod tests {
-    use super::{crust_region, share_text, MIN_CRUST, PLATE_H};
+    use super::{crust_region, lifted, share_text, MIN_CRUST, PLATE_H};
+    use crate::treemap::{Tile, ACTIVE, DONE, PENDING, SKIPPED};
     use crate::widgets::CONTENT_WIDTH;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
     use wd40::disk::DiskSpace;
 
     fn disk(total: u64) -> Option<DiskSpace> {
         Some(DiskSpace { free_bytes: total / 2, total_bytes: total })
+    }
+
+    fn tile(size: u64, state: u8) -> Tile {
+        Tile {
+            rect: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(10.0, 10.0)),
+            name: String::new(),
+            size,
+            state,
+        }
+    }
+
+    #[test]
+    fn the_crust_lifts_with_the_bytes_that_have_really_gone() {
+        assert_eq!(lifted(&[tile(600, PENDING), tile(400, ACTIVE)]), 0.0);
+        assert!((lifted(&[tile(600, DONE), tile(400, PENDING)]) - 0.6).abs() < 1e-9);
+        // A target left in place is still crust: it lifts nothing.
+        assert_eq!(lifted(&[tile(500, SKIPPED), tile(500, PENDING)]), 0.0);
     }
 
     #[test]

@@ -4,9 +4,10 @@
 // really gone. Exports: `plate_view`. Deps: crate::{can, crust, drift, spray}.
 
 use crate::can::draw_nozzle;
-use crate::crust::{idle_text, legend_text, paint_plate, plate_edge};
+use crate::crust::{paint_plate, plate_edge};
+use crate::legend::{idle_text, legend_text, worked_name};
 use crate::drift::{start_clock, stop_clock, ticking, Drift};
-use crate::metal::{grey, inset, outline, reduce_motion};
+use crate::metal::reduce_motion;
 use crate::spray::{wipe, Mist};
 use crate::state::CleanProgress;
 use crate::treemap::{contains, tiles, Tile, DONE};
@@ -106,7 +107,9 @@ define_class!(
                 return stop_clock();
             }
             if ivars.working.get() {
-                let home = self.home();
+                // Where the nozzle waits when the job has nothing to aim it at.
+                let size = self.bounds().size;
+                let home = NSPoint::new(size.width / 2.0, size.height / 2.0);
                 let tiles = ivars.tiles.borrow();
                 ivars.drift.borrow_mut().step(&tiles, home);
             }
@@ -152,15 +155,17 @@ impl PlateView {
         let bounds = self.bounds();
         let ivars = self.ivars();
         let tiles = ivars.tiles.borrow();
-        paint_plate(bounds, ivars.dark, &tiles);
-        if let Some(tile) = usize::try_from(ivars.hover.get()).ok().and_then(|at| tiles.get(at)) {
-            grey(1.0, 0.8).setStroke();
-            outline(inset(tile.rect, 1.0), 1.5);
-        }
+        paint_plate(bounds, ivars.dark, &tiles, ivars.hover.get());
+        // Placed before the can so the can can be told to keep off it, drawn
+        // after the can so nothing at all can cover the name.
+        let mut name = worked_name(bounds, &tiles, ivars.dark);
         drop(tiles);
         ivars.mist.borrow().draw();
         if ivars.inside.get() || self.moving() {
-            draw_nozzle(self.nozzle(), self.spray_on());
+            draw_nozzle(self.nozzle(), self.spray_on(), bounds, name.as_mut());
+        }
+        if let Some(name) = &name {
+            name.draw();
         }
         plate_edge(bounds);
     }
@@ -207,12 +212,6 @@ impl PlateView {
             true => ivars.pointer.get(),
             false => ivars.drift.borrow().point(),
         }
-    }
-
-    /// Where the nozzle waits when the job has nothing left to point it at.
-    fn home(&self) -> NSPoint {
-        let size = self.bounds().size;
-        NSPoint::new(size.width / 2.0, size.height / 2.0)
     }
 
     fn on_screen(&self) -> bool {

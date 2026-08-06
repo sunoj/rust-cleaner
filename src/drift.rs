@@ -115,7 +115,8 @@ impl Drift {
 }
 
 /// The biggest tile in this state — the one whose work is most worth showing.
-fn largest(tiles: &[Tile], state: u8) -> Option<&Tile> {
+/// The plate names the same tile this aims at, so the two never disagree.
+pub fn largest(tiles: &[Tile], state: u8) -> Option<&Tile> {
     tiles
         .iter()
         .filter(|tile| tile.state == state)

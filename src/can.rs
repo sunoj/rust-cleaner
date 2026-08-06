@@ -4,10 +4,12 @@
 // can reads the same on a light plate as on a dark one. Exports: `draw_nozzle`.
 // Deps: crate::metal, objc2 AppKit. Drawing calls belong in `drawRect:`.
 
+use crate::grip::{hold, Grip, Span};
+use crate::legend::Name;
 use crate::metal::{circle_path, grey};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSBezierPath, NSColor};
-use objc2_foundation::NSPoint;
+use objc2_foundation::{NSPoint, NSRect};
 
 // The can's own frame, in points: x runs right from the pivot, y runs up from
 // the head — the end that is pointed at the plate. Every figure is the icon's
@@ -33,6 +35,12 @@ const STRAW_Y: (f64, f64) = (6.5, 30.5);
 /// The free end of the straw, out of the head and pointed at the plate.
 const TIP_X: (f64, f64) = (5.5, 8.0);
 const TIP_Y: (f64, f64) = (-9.0, 0.0);
+/// The can proper, head to base: what has to land whole inside the plate. The
+/// straw tip is deliberately not in it — it ends on the point being sprayed,
+/// and that point is allowed to be the very edge of the plate, so nothing could
+/// ever fit there if the tip had to be inside too. The tip is the only part
+/// that may be clipped, and only within its own 9pt of the boundary.
+const SPAN: Span = ((HEAD_X.0, BODY_X.1), (HEAD_Y.0, RIM_BASE_Y.1));
 
 /// Every palette below is the icon's own gradient, composited over the panel it
 /// sits on (#E0DCD5) so it can be drawn as opaque paint. Channels are kept as
@@ -85,31 +93,35 @@ const SHOULDER: [(f64, [f64; 3]); 4] = [
     (1.0, [136.0, 149.0, 169.0]),
 ];
 
-/// Cone then can, both hung off the pointer exactly as the mock hangs them: the
-/// can sits up and to the right, which also keeps it clear of the arrow cursor.
-pub fn draw_nozzle(point: NSPoint, cone: bool) {
+/// Cone then can. The can hangs off the point it is aimed at, as the mock hangs
+/// it: up and to the right, which also keeps it clear of the arrow cursor.
+pub fn draw_nozzle(point: NSPoint, cone: bool, plate: NSRect, name: Option<&mut Name>) {
     if cone {
         for step in 0..12 {
             grey(1.0, 0.1).setFill();
             circle_path(point, 26.0 * (1.0 - step as f64 / 12.0)).fill();
         }
     }
-    let angle = -24.0_f64.to_radians();
-    let pivot = NSPoint::new(point.x + 6.0, point.y + 14.0);
-    shoulder(pivot, angle);
-    sweep(pivot, angle, NECK_Y, NECK_X, NECK_X, &RIM_TOP);
-    sweep(pivot, angle, BODY_Y, BODY_X, BODY_X, &BODY);
-    sweep(pivot, angle, BAND_Y, BODY_X, BODY_X, &BAND);
-    sweep(pivot, angle, RIM_TOP_Y, BODY_X, BODY_X, &RIM_TOP);
-    sweep(pivot, angle, RIM_BASE_Y, BODY_X, BASE_CHAMFER, &RIM_BASE);
-    sweep(pivot, angle, STRAW_Y, STRAW_X, STRAW_X, &STRAW);
-    sweep(pivot, angle, TIP_Y, TIP_X, TIP_X, &STRAW);
-    sweep(pivot, angle, HEAD_Y, HEAD_X, HEAD_X, &HEAD);
+    let choices = name.as_ref().map(|name| name.choices());
+    let held = hold(point, plate, choices.as_ref().map_or(&[] as &[NSRect], |all| &all[..]), SPAN);
+    if let Some(name) = name {
+        name.take(held.cleared.unwrap_or(0));
+    }
+    let can = Grip::turned(point, held.turn);
+    shoulder(&can);
+    sweep(&can, NECK_Y, NECK_X, NECK_X, &RIM_TOP);
+    sweep(&can, BODY_Y, BODY_X, BODY_X, &BODY);
+    sweep(&can, BAND_Y, BODY_X, BODY_X, &BAND);
+    sweep(&can, RIM_TOP_Y, BODY_X, BODY_X, &RIM_TOP);
+    sweep(&can, RIM_BASE_Y, BODY_X, BASE_CHAMFER, &RIM_BASE);
+    sweep(&can, STRAW_Y, STRAW_X, STRAW_X, &STRAW);
+    sweep(&can, TIP_Y, TIP_X, TIP_X, &STRAW);
+    sweep(&can, HEAD_Y, HEAD_X, HEAD_X, &HEAD);
 }
 
 /// The tapered shoulder between neck and body, in bands along the can because
 /// that is the way its gradient runs.
-fn shoulder(pivot: NSPoint, angle: f64) {
+fn shoulder(can: &Grip) {
     const BANDS: usize = 3;
     let span = |t: f64| {
         (
@@ -121,14 +133,14 @@ fn shoulder(pivot: NSPoint, angle: f64) {
         let (a, b) = (band as f64 / BANDS as f64, (band + 1) as f64 / BANDS as f64);
         let tone = mix(&SHOULDER, (a + b) / 2.0);
         let y = (lerp(SHOULDER_Y.0, SHOULDER_Y.1, a), lerp(SHOULDER_Y.0, SHOULDER_Y.1, b));
-        sweep(pivot, angle, y, span(a), span(b), &[(0.0, tone)]);
+        sweep(can, y, span(a), span(b), &[(0.0, tone)]);
     }
 }
 
 /// One part of the can: a gradient across it, drawn as vertical strips, with an
 /// x span at each end so the same call covers a straight side, the tapered
 /// shoulder or the chamfered base. Narrow parts take fewer strips.
-fn sweep(pivot: NSPoint, angle: f64, y: (f64, f64), lower: (f64, f64), upper: (f64, f64), stops: Stops) {
+fn sweep(can: &Grip, y: (f64, f64), lower: (f64, f64), upper: (f64, f64), stops: Stops) {
     let strips = ((lower.1 - lower.0) / 2.0).ceil().clamp(2.0, 12.0) as usize;
     for strip in 0..strips {
         let (a, b) = (strip as f64 / strips as f64, (strip + 1) as f64 / strips as f64);
@@ -137,8 +149,7 @@ fn sweep(pivot: NSPoint, angle: f64, y: (f64, f64), lower: (f64, f64), upper: (f
         // painted over instead of showing as an antialiased hairline.
         let b = (b + 0.5 / strips as f64).min(1.0);
         poly(
-            pivot,
-            angle,
+            can,
             &[
                 (lerp(lower.0, lower.1, a), y.0),
                 (lerp(lower.0, lower.1, b), y.0),
@@ -170,12 +181,11 @@ fn ink(tone: [f64; 3]) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(tone[0] / 255.0, tone[1] / 255.0, tone[2] / 255.0, 1.0)
 }
 
-/// Points in the can's own frame, rotated about the pivot and filled.
-fn poly(pivot: NSPoint, angle: f64, points: &[(f64, f64)]) {
-    let (sin, cos) = angle.sin_cos();
+/// Points in the can's own frame, placed by the grip and filled.
+fn poly(can: &Grip, points: &[(f64, f64)]) {
     let path = NSBezierPath::new();
     for (index, (x, y)) in points.iter().enumerate() {
-        let point = NSPoint::new(pivot.x + x * cos - y * sin, pivot.y + x * sin + y * cos);
+        let point = can.map(*x, *y);
         match index {
             0 => path.moveToPoint(point),
             _ => path.lineToPoint(point),
@@ -183,4 +193,69 @@ fn poly(pivot: NSPoint, angle: f64, points: &[(f64, f64)]) {
     }
     path.closePath();
     path.fill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SPAN;
+    use crate::crust::PLATE_H;
+    use crate::grip::{fits, hold, turns};
+    use crate::legend::label_spots;
+    use crate::widgets::CONTENT_WIDTH;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    fn plate() -> NSRect {
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(CONTENT_WIDTH, PLATE_H))
+    }
+
+    /// Every point of the plate, on a 4pt grid.
+    fn aims() -> impl Iterator<Item = NSPoint> {
+        (0..=(CONTENT_WIDTH as usize / 4)).flat_map(|x| {
+            (0..=(PLATE_H as usize / 4)).map(move |y| NSPoint::new(x as f64 * 4.0, y as f64 * 4.0))
+        })
+    }
+
+    /// The nozzle has to be able to work a tile anywhere on the plate — the top
+    /// edge above all, which is where the crust hangs — without the can being
+    /// cut off by the boundary everything there is clipped to.
+    #[test]
+    fn there_is_a_grip_that_fits_wherever_the_nozzle_can_be_aimed() {
+        for at in aims() {
+            assert!(turns().any(|turn| fits(at, turn, plate(), None, SPAN)), "nothing fits at {at:?}");
+        }
+    }
+
+    /// The can and the name are both placed from the tile being worked, so they
+    /// are always drawn next to each other. On the same grid: the can has to
+    /// leave the name one of its two places — and where it cannot, that has to
+    /// be a tile hard against the side of the plate, which has no room beside
+    /// it for a name and a can both. There the name keeps its place and is
+    /// drawn over the can, so it still reads.
+    #[test]
+    fn the_can_leaves_the_name_a_place_except_hard_against_the_sides() {
+        let pill = NSSize::new(110.0, 19.0);
+        for at in aims() {
+            // The patch under the nozzle, and the places its name could take.
+            let tile = NSRect::new(NSPoint::new(at.x - 16.0, at.y - 11.0), NSSize::new(32.0, 22.0));
+            let choices = label_spots(plate(), tile, pill).map(|spot| NSRect::new(spot, pill));
+            let held = hold(at, plate(), &choices, SPAN);
+            assert!(fits(at, held.turn, plate(), None, SPAN), "the can is cut off at {at:?}");
+            match held.cleared {
+                Some(choice) => assert!(
+                    fits(at, held.turn, plate(), Some(choices[choice]), SPAN),
+                    "the can covers the name at {at:?}"
+                ),
+                None => assert!(
+                    at.x <= 24.0 || at.x >= CONTENT_WIDTH - 24.0,
+                    "the can covers the name away from the sides, at {at:?}"
+                ),
+            }
+        }
+    }
+
+    /// And a can with the room it wants is left exactly where the mock hangs it.
+    #[test]
+    fn a_can_with_room_around_it_is_not_turned() {
+        assert!(fits(NSPoint::new(120.0, 60.0), 0.0, plate(), None, SPAN));
+    }
 }

@@ -57,7 +57,7 @@ pub struct CleanItem {
     pub status: CleanItemStatus,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CleanProgress {
     pub items: Vec<CleanItem>,
     pub freed_so_far: u64,

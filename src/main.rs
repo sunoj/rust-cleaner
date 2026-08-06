@@ -13,9 +13,11 @@ mod crust;
 mod disk_gauge;
 mod done_view;
 mod drift;
+mod grip;
 mod header;
 mod hover_row;
 mod icon;
+mod legend;
 mod live;
 mod medal;
 mod menu_rows;
@@ -23,6 +25,7 @@ mod metal;
 mod motion;
 mod mainthread;
 mod names;
+mod pace;
 mod plate;
 mod popover;
 mod reveal;
@@ -104,6 +107,17 @@ define_class!(
         #[unsafe(method(handleStopClean:))]
         fn handle_stop_clean(&self, _sender: &AnyObject) {
             tasks::request_stop();
+        }
+
+        /// The run is over; the screen is only still up to be read.
+        #[unsafe(method(handleShowResult:))]
+        fn handle_show_result(&self, _sender: &AnyObject) {
+            tasks::show_result_now(self.mtm());
+        }
+
+        #[unsafe(method(cleanHoldTick:))]
+        fn clean_hold_tick(&self, _sender: *mut AnyObject) {
+            tasks::show_result(self.mtm());
         }
 
         #[unsafe(method(handleDoneAck:))]

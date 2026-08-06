@@ -8,24 +8,28 @@ use crate::state::{
     with_state, with_state_ret, CleanProgress, DoneSummary, UiScreen,
 };
 use crate::tasks_clean::{self, gather_job, initial_progress, CleanJob};
-use crate::{MenuHandler, HANDLER};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2_foundation::{MainThreadMarker, NSTimer};
 use crate::mainthread::{
-    clean_done_trampoline, dispatch_to_main, progress_trampoline, scan_done_trampoline,
-    sizes_done_trampoline, sizes_tick_trampoline,
+    clean_done_trampoline, dispatch_to_main, progress_trampoline, scan_done_trampoline, schedule,
+    sizes_done_trampoline, sizes_tick_trampoline, stop_timer,
 };
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 use wd40::disk::disk_space;
 use wd40::discover::scan_discover;
 use wd40::scanner::TargetDir;
 use wd40::sizes::size_targets;
 
 const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
+/// A clean that takes a moment is worth watching, and one that takes none at
+/// all used to flash past before anything could be read. The floor is on the
+/// screen alone: removal starts the instant it is asked for, nothing waits on
+/// it, and every figure on the held screen is the finished one.
+const MIN_CLEAN_SCREEN: f64 = 2.0;
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
@@ -33,6 +37,10 @@ static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
+/// The finished summary, waiting for the cleaning screen to have been up long
+/// enough to have been read.
+static PENDING_DONE: Mutex<Option<DoneSummary>> = Mutex::new(None);
+static CLEAN_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
 static PROGRESS: Mutex<Option<CleanProgress>> = Mutex::new(None);
 /// Sizes that have settled but not yet reached the screen.
 static SIZES: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
@@ -43,6 +51,9 @@ static PROGRESS_HOP: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static AUTO_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
     static SCAN_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+    /// Runs out the rest of the cleaning screen's minimum time. It carries no
+    /// work; the run is already over by the time it is scheduled.
+    static HOLD_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub fn is_busy() -> bool {
@@ -157,6 +168,10 @@ pub fn spawn_clean_selected() {
         state.done = None;
     });
     if let Some(mtm) = MainThreadMarker::new() {
+        // A run of its own cancels whatever the last one was still showing.
+        stop_timer(&HOLD_TIMER);
+        *PENDING_DONE.lock().unwrap() = None;
+        *CLEAN_SHOWN.lock().unwrap() = Some(Instant::now());
         popover::refresh(mtm);
     }
 
@@ -203,14 +218,56 @@ pub fn request_stop() {
 
 pub fn on_clean_done(mtm: MainThreadMarker) {
     CLEANING.store(false, Ordering::Relaxed);
-    let summary = DONE_RESULT.lock().unwrap().take();
+    *PENDING_DONE.lock().unwrap() = DONE_RESULT.lock().unwrap().take();
+    // The last thing the run published is what really happened. It goes on
+    // screen before anything is held back, so a held screen is a finished one:
+    // the counts, the bar and the plate all read done because they are.
+    let settled = PROGRESS.lock().unwrap().clone();
+    with_state(|state| state.cleaning = settled);
+    let Some(seconds) = hold_left() else { return show_result(mtm) };
+    if !live::progress_changed(mtm) {
+        popover::refresh(mtm);
+    }
+    schedule(&HOLD_TIMER, seconds, sel!(cleanHoldTick:), false);
+}
+
+/// Seconds the cleaning screen has still to run, or None when it owes none —
+/// a job that already took longer than the floor, or Reduce Motion, which is
+/// never made to wait for a screen.
+fn hold_left() -> Option<f64> {
+    if crate::metal::reduce_motion() {
+        return None;
+    }
+    let shown = (*CLEAN_SHOWN.lock().unwrap())?;
+    let left = MIN_CLEAN_SCREEN - shown.elapsed().as_secs_f64();
+    (left > 0.05).then_some(left)
+}
+
+/// Hand the finished run to the done screen. Called by the floor's timer, and
+/// straight away when there is no floor left to run out.
+pub fn show_result(mtm: MainThreadMarker) {
+    stop_timer(&HOLD_TIMER);
+    // A new run started while this one was being shown; its screen wins.
+    if CLEANING.load(Ordering::Relaxed) {
+        return;
+    }
+    let summary = PENDING_DONE.lock().unwrap().take();
     *PROGRESS.lock().unwrap() = None;
+    *CLEAN_SHOWN.lock().unwrap() = None;
     with_state(|state| {
         state.cleaning = None;
         state.done = summary;
         state.screen = UiScreen::Done;
     });
     popover::refresh(mtm);
+}
+
+/// The button on the held screen. It only skips the wait — there is nothing to
+/// show until the run has handed its summary over.
+pub fn show_result_now(mtm: MainThreadMarker) {
+    if PENDING_DONE.lock().unwrap().is_some() {
+        show_result(mtm);
+    }
 }
 
 pub fn start_auto_scan() {
@@ -224,27 +281,4 @@ pub fn start_auto_clean(hours: u64) {
 
 pub fn stop_auto_clean() {
     stop_timer(&AUTO_TIMER);
-}
-
-type TimerSlot = std::thread::LocalKey<RefCell<Option<Retained<NSTimer>>>>;
-
-fn schedule(slot: &'static TimerSlot, interval: f64, selector: objc2::runtime::Sel, repeats: bool) {
-    HANDLER.with(|cell| {
-        let Some(handler) = cell.borrow().as_ref().map(Retained::clone) else { return };
-        let target: &AnyObject = unsafe { &*(&*handler as *const MenuHandler as *const AnyObject) };
-        let timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                interval, target, selector, None, repeats,
-            )
-        };
-        slot.with(|cell| *cell.borrow_mut() = Some(timer));
-    });
-}
-
-fn stop_timer(slot: &'static TimerSlot) {
-    slot.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.invalidate();
-        }
-    });
 }

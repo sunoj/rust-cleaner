@@ -86,6 +86,8 @@ pub struct Clean {
     pub header: Zone,
     pub strip: Zone,
     pub footer: Zone,
+    /// The line above the path, which stops saying "removing" when nothing is.
+    pub caption: Retained<NSTextField>,
     pub path: Retained<NSTextField>,
     pub plate: Retained<PlateView>,
     /// Region of the plate the crust may cover, fixed for the run.
@@ -190,7 +192,7 @@ pub fn progress_changed(mtm: MainThreadMarker) -> bool {
             crate::clean_view::draw_footer(
                 live.footer.view(), &progress, &live.theme, target, mtm,
             );
-            crate::clean_view::show_path(&live.path, &progress);
+            crate::clean_view::show_path(&live.caption, &live.path, &progress);
             live.plate.update(&progress, live.crust);
             true
         })
