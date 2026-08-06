@@ -221,6 +221,11 @@ define_class!(
             tasks::on_sizes_tick(self.mtm());
         }
 
+        #[unsafe(method(reclaimDone:))]
+        fn reclaim_done(&self, _sender: *mut AnyObject) {
+            tasks::on_reclaim_done(self.mtm());
+        }
+
         #[unsafe(method(sizesDone:))]
         fn sizes_done(&self, _sender: *mut AnyObject) {
             tasks::on_sizes_done(self.mtm());
@@ -277,6 +282,7 @@ fn main() {
         done: None,
         status_item,
         updater: Updater::start(),
+        reclaim: None,
     });
 
     popover::attach(mtm);

@@ -41,6 +41,7 @@ static SCANNING: AtomicBool = AtomicBool::new(false);
 static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
+static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
 /// The finished summary, waiting for the cleaning screen to have been up long
 /// enough to have been read.
@@ -149,11 +150,34 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     // point at which rows are allowed to move.
     with_state(|state| state.finish_sizing());
     popover::refresh(mtm);
+    start_reclaim();
     #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
     if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
         spawn_clean_selected();
     }
+}
+
+/// Work out what the clone-seeded targets really occupy on the device. Costs
+/// one `open` per file, so it runs after the sizes are on screen rather than
+/// before, and the totals use summed sizes until it lands.
+fn start_reclaim() {
+    let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
+    if targets.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        *RECLAIM_RESULT.lock().unwrap() = wd40::reclaim::Reclaim::measure(&targets);
+        dispatch_to_main(crate::mainthread::reclaim_done_trampoline);
+    });
+}
+
+/// The accounting is in: totals stop being a sum and start being a promise.
+pub fn on_reclaim_done(mtm: MainThreadMarker) {
+    let Some(found) = RECLAIM_RESULT.lock().unwrap().take() else { return };
+    with_state(|state| state.reclaim = Some(found));
+    popover::refresh(mtm);
+    popover::refresh_status(mtm);
 }
 
 /// Clean exactly the checked items. Irreversible; nothing else is touched.

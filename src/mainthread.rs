@@ -35,6 +35,7 @@ macro_rules! trampoline {
 trampoline!(scan_done_trampoline, scanDone);
 trampoline!(sizes_tick_trampoline, sizesTick);
 trampoline!(sizes_done_trampoline, sizesDone);
+trampoline!(reclaim_done_trampoline, reclaimDone);
 trampoline!(clean_done_trampoline, cleanDone);
 trampoline!(progress_trampoline, cleanProgress);
 
