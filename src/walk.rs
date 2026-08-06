@@ -60,12 +60,17 @@ pub(crate) struct Walk {
 }
 
 impl Walk {
-    pub fn new(paths: &[PathBuf]) -> Self {
+    /// `skip` names targets whose size is already known, so they are never
+    /// queued. Their figures reach the publisher before the walk starts, which
+    /// is what keeps nesting right without walking them.
+    pub fn new(paths: &[PathBuf], skip: &[bool]) -> Self {
         // Shallowest first. Nesting is handled by the publisher whatever the
         // order, so this is purely about the tail: the big roots (cache stores,
         // shared cargo targets) sit near the top of the tree, and opening one of
         // those last leaves every worker waiting on it.
-        let mut order: Vec<usize> = (0..paths.len()).collect();
+        let mut order: Vec<usize> = (0..paths.len())
+            .filter(|index| !skip.get(*index).copied().unwrap_or(false))
+            .collect();
         order.sort_by_key(|index| paths[*index].components().count());
         Self {
             queue: Mutex::new(Queue {
