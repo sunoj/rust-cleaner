@@ -22,6 +22,7 @@ mod scan_view;
 mod screenshot;
 mod selection;
 mod settings_view;
+mod spray;
 mod state;
 mod style;
 mod tasks;

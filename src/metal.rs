@@ -1,11 +1,27 @@
 // Brushed-metal drawing primitives shared by the cleaning plate and the done
-// medal: the 135° band sweep, the concentric turning marks, and small helpers.
-// Exports: `brushed`, `rings`, `circle_path`, `grey`, `rnd`, `outline`, `inset`.
-// Deps: objc2_app_kit, objc2_foundation. Call these inside `drawRect:` only.
+// medal: the 135° band sweep, the concentric turning marks, small helpers, and
+// the Reduce Motion flag both screens gate their animation on.
+// Exports: `brushed`, `rings`, `circle_path`, `grey`, `rnd`, `outline`, `inset`,
+// `reduce_motion`. Deps: objc2 AppKit. Drawing calls belong in `drawRect:`.
 
 use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject};
+use objc2::msg_send;
 use objc2_app_kit::{NSBezierPath, NSColor};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+/// Read through the runtime: this is the only accessibility flag the app wants,
+/// and it is not worth pulling the whole NSWorkspace binding in for.
+pub fn reduce_motion() -> bool {
+    let Some(class) = AnyClass::get(c"NSWorkspace") else { return false };
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
+        match workspace.is_null() {
+            true => false,
+            false => msg_send![&*workspace, accessibilityDisplayShouldReduceMotion],
+        }
+    }
+}
 
 /// The mock's 135° brushed steel. The bands run corner to corner and each one
 /// sits a hair off its neighbour, so the surface reads as brushed, not printed.

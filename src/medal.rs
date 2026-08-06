@@ -3,9 +3,9 @@
 // Exports: `medal`, `start_sheen`, `stop_sheen`. Honours Reduce Motion.
 // Deps: crate::metal, objc2 AppKit/Foundation.
 
-use crate::metal::{brushed, circle_path, grey, rings};
+use crate::metal::{brushed, circle_path, grey, reduce_motion, rings};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSBezierPath, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSTimer};
@@ -145,17 +145,4 @@ fn star(centre: NSPoint, radius: f64, alpha: f64) {
     path.closePath();
     grey(1.0, alpha).setFill();
     path.fill();
-}
-
-/// Read through the runtime: this is the only accessibility flag the app wants,
-/// and it is not worth pulling the whole NSWorkspace binding in for.
-fn reduce_motion() -> bool {
-    let Some(class) = AnyClass::get(c"NSWorkspace") else { return false };
-    unsafe {
-        let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
-        match workspace.is_null() {
-            true => false,
-            false => msg_send![&*workspace, accessibilityDisplayShouldReduceMotion],
-        }
-    }
 }

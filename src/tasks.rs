@@ -63,6 +63,9 @@ pub fn start_scan(then_clean: bool) {
 }
 
 pub fn on_scan_done(mtm: MainThreadMarker) {
+    // A new scan replaces the rows, so the remembered offset would point at
+    // targets that are no longer there.
+    crate::widgets::reset_scroll();
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
         return;

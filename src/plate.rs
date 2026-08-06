@@ -1,40 +1,42 @@
-// The cleaning screen's plate: brushed steel under a rust crust, one tile per
-// target. Tiles clear as the job removes them; rubbing only polishes the metal.
-// Exports: `plate_view`, `clear_polish`.
-// Deps: crate::{header, metal, state, treemap}, objc2 AppKit.
+// The cleaning screen's plate: brushed steel, a rust crust covering the share
+// of the volume these targets occupy, and a WD-40 nozzle on the pointer. A tile
+// only clears when its target is really gone; the spray lifts the residue left
+// behind. Exports: `plate_view`. Deps: crate::{header, metal, spray, treemap}.
 
 use crate::header::scan_size;
-use crate::metal::{brushed, circle_path, grey, inset, outline, rings, rnd};
+use crate::metal::{brushed, grey, inset, outline, reduce_motion, rings, rnd};
+use crate::spray::{draw_film, draw_nozzle, wipe, Mist};
 use crate::state::CleanProgress;
-use crate::treemap::{contains, tiles, Tile, ACTIVE, DONE, SKIPPED};
+use crate::treemap::{contains, rust_tone, tiles, Tile, ACTIVE, DONE, SKIPPED};
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
+use objc2::runtime::AnyObject;
+use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSEvent, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::cell::{Cell, RefCell};
 
-const GX: usize = 44;
-const GY: usize = 24;
+/// 50 Hz while the mist is alive, and not a tick longer.
+const MIST_TICK: f64 = 1.0 / 50.0;
 
 thread_local! {
-    /// A rub has to outlive the popover rebuild that every progress tick
-    /// triggers, so the polish mask lives beside the view, not inside it.
-    static POLISH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-}
-
-pub fn clear_polish() {
-    POLISH.with(|mask| mask.borrow_mut().clear());
+    static MIST: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub struct PlateIvars {
     tiles: Vec<Tile>,
     hover: Cell<isize>,
-    /// Tile names live under the plate, not on it: the small tiles have no room.
+    /// Tile names live under the plate, not on it: small tiles have no room.
     legend: Retained<NSTextField>,
     idle: String,
     dark: bool,
+    /// Reduce Motion: the wipe still lands, the mist never travels.
+    still: bool,
+    pointer: Cell<NSPoint>,
+    inside: Cell<bool>,
+    spraying: Cell<bool>,
+    mist: RefCell<Mist>,
 }
 
 define_class!(
@@ -50,6 +52,11 @@ define_class!(
             self.paint();
         }
 
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, event: &NSEvent) {
+            self.track(event);
+        }
+
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
             self.track(event);
@@ -58,19 +65,50 @@ define_class!(
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             self.track(event);
-            self.rub(event);
+            self.ivars().spraying.set(true);
+            self.burst(self.ivars().pointer.get());
+            start_mist(self);
         }
 
         #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
             self.track(event);
-            self.rub(event);
+            self.burst(self.ivars().pointer.get());
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            self.ivars().spraying.set(false);
+            self.setNeedsDisplay(true);
         }
 
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
-            self.ivars().hover.set(-1);
+            let ivars = self.ivars();
+            ivars.inside.set(false);
+            ivars.spraying.set(false);
+            ivars.hover.set(-1);
             self.refresh_legend();
+            self.setNeedsDisplay(true);
+        }
+
+        #[unsafe(method(mistTick:))]
+        fn mist_tick(&self, _timer: *mut AnyObject) {
+            let ivars = self.ivars();
+            // A popover closed mid-spray takes its window with it, and a view
+            // with no window must never keep a 50 Hz timer alive.
+            if self.window().is_none() {
+                ivars.spraying.set(false);
+                return stop_mist();
+            }
+            if ivars.spraying.get() {
+                let point = ivars.mist.borrow_mut().wobble(ivars.pointer.get(), 5.0);
+                self.burst(point);
+            }
+            let alive = ivars.mist.borrow_mut().step();
+            if !alive && !ivars.spraying.get() {
+                stop_mist();
+            }
             self.setNeedsDisplay(true);
         }
 
@@ -108,15 +146,18 @@ impl PlateView {
         let ivars = self.ivars();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 10.0, 10.0).addClip();
         brushed(bounds, ivars.dark);
-        let centre = NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0);
-        rings(centre, bounds.size.height * 0.44, ivars.dark);
+        rings(NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0), bounds.size.height * 0.44, ivars.dark);
+        draw_film(bounds, &ivars.tiles);
         for (index, tile) in ivars.tiles.iter().enumerate() {
             draw_tile(index, tile);
         }
-        draw_polish(bounds, &ivars.tiles);
         if let Some(tile) = self.hovered() {
             grey(1.0, 0.8).setStroke();
             outline(inset(tile.rect, 1.0), 1.5);
+        }
+        ivars.mist.borrow().draw();
+        if ivars.inside.get() {
+            draw_nozzle(ivars.pointer.get(), ivars.spraying.get());
         }
         NSColor::colorWithSRGBRed_green_blue_alpha(0.11, 0.1, 0.09, 0.16).setStroke();
         let edge = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset(bounds, 0.5), 9.5, 9.5);
@@ -130,23 +171,30 @@ impl PlateView {
             .and_then(|index| self.ivars().tiles.get(index))
     }
 
+    /// One puff: wipe what the nozzle covers, then throw off mist.
+    fn burst(&self, point: NSPoint) {
+        let ivars = self.ivars();
+        wipe(point, self.bounds(), &ivars.tiles);
+        if !ivars.still {
+            ivars.mist.borrow_mut().emit(point);
+        }
+        self.setNeedsDisplay(true);
+    }
+
     fn track(&self, event: &NSEvent) {
+        let ivars = self.ivars();
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
-        let hit = self
-            .ivars()
+        ivars.pointer.set(point);
+        ivars.inside.set(true);
+        let hit = ivars
             .tiles
             .iter()
             .position(|tile| contains(tile.rect, point))
             .map_or(-1, |index| index as isize);
-        if hit != self.ivars().hover.get() {
-            self.ivars().hover.set(hit);
+        if hit != ivars.hover.get() {
+            ivars.hover.set(hit);
             self.refresh_legend();
-            self.setNeedsDisplay(true);
         }
-    }
-
-    fn rub(&self, event: &NSEvent) {
-        mark_polish(self.convertPoint_fromView(event.locationInWindow(), None), self.bounds());
         self.setNeedsDisplay(true);
     }
 
@@ -167,35 +215,63 @@ impl PlateView {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn plate_view(
     frame: NSRect,
     progress: &CleanProgress,
+    crust: NSRect,
     legend: Retained<NSTextField>,
     idle: String,
     dark: bool,
     mtm: MainThreadMarker,
 ) -> Retained<PlateView> {
+    stop_mist();
     let view = mtm.alloc::<PlateView>().set_ivars(PlateIvars {
-        tiles: tiles(progress, frame.size.width, frame.size.height),
+        tiles: tiles(progress, crust),
         hover: Cell::new(-1),
         legend,
         idle,
         dark,
+        still: reduce_motion(),
+        pointer: Cell::new(NSPoint::new(-100.0, -100.0)),
+        inside: Cell::new(false),
+        spraying: Cell::new(false),
+        mist: RefCell::new(Mist::default()),
     });
     let view: Retained<PlateView> = unsafe { msg_send![super(view), initWithFrame: frame] };
     view.refresh_legend();
     view
 }
 
+fn start_mist(view: &PlateView) {
+    if view.ivars().still {
+        return;
+    }
+    stop_mist();
+    let target: &AnyObject = unsafe { &*(view as *const PlateView as *const AnyObject) };
+    let timer = unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            MIST_TICK, target, sel!(mistTick:), None, true,
+        )
+    };
+    MIST.with(|cell| *cell.borrow_mut() = Some(timer));
+}
+
+fn stop_mist() {
+    MIST.with(|cell| {
+        if let Some(timer) = cell.borrow_mut().take() {
+            timer.invalidate();
+        }
+    });
+}
+
+/// Crust still on disk. Cleared tiles are drawn by the residue film instead.
 fn draw_tile(index: usize, tile: &Tile) {
-    const RUST: [(f64, f64, f64); 4] = [
-        (0.545, 0.333, 0.2), (0.486, 0.275, 0.149), (0.584, 0.337, 0.18), (0.635, 0.376, 0.227),
-    ];
     if tile.state == DONE || tile.rect.size.width < 0.5 {
         return;
     }
     let alpha = if tile.state == SKIPPED { 0.5 } else { 1.0 };
-    let (r, g, b) = RUST[index % RUST.len()];
+    let (r, g, b) = rust_tone(index);
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, alpha).setFill();
     NSBezierPath::fillRect(tile.rect);
     let mut seed = 0x9e37_79b9_u32 ^ (index as u32).wrapping_mul(2_654_435_761);
@@ -205,7 +281,7 @@ fn draw_tile(index: usize, tile: &Tile) {
         let cy = tile.rect.origin.y + rnd(&mut seed) * tile.rect.size.height;
         let (pr, pg, pb) = if rnd(&mut seed) > 0.5 { (0.769, 0.529, 0.31) } else { (0.29, 0.173, 0.106) };
         NSColor::colorWithSRGBRed_green_blue_alpha(pr, pg, pb, (0.1 + rnd(&mut seed) * 0.26) * alpha).setFill();
-        circle_path(NSPoint::new(cx, cy), 1.5 + rnd(&mut seed) * 5.5).fill();
+        crate::metal::circle_path(NSPoint::new(cx, cy), 1.5 + rnd(&mut seed) * 5.5).fill();
     }
     NSColor::colorWithSRGBRed_green_blue_alpha(0.118, 0.067, 0.035, 0.55 * alpha).setStroke();
     outline(inset(tile.rect, 0.5), 1.0);
@@ -213,45 +289,4 @@ fn draw_tile(index: usize, tile: &Tile) {
         NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.94, 0.86, 0.75).setStroke();
         outline(inset(tile.rect, 1.5), 2.0);
     }
-}
-
-/// Rubbing brings up a shine. It never lifts crust: what is still rusty is
-/// still on disk, and only the removal job may say otherwise.
-fn draw_polish(rect: NSRect, tiles: &[Tile]) {
-    let (cw, ch) = (rect.size.width / GX as f64, rect.size.height / GY as f64);
-    POLISH.with(|cell| {
-        for (index, value) in cell.borrow().iter().enumerate().filter(|(_, v)| **v > 0) {
-            let centre = NSPoint::new(
-                rect.origin.x + ((index % GX) as f64 + 0.5) * cw,
-                rect.origin.y + ((index / GX) as f64 + 0.5) * ch,
-            );
-            let bare = tiles
-                .iter()
-                .find(|tile| contains(tile.rect, centre))
-                .is_none_or(|tile| tile.state == DONE);
-            let alpha = *value as f64 / 255.0 * if bare { 0.36 } else { 0.08 };
-            NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, alpha).setFill();
-            circle_path(centre, cw.max(ch) * 0.9).fill();
-        }
-    });
-}
-
-fn mark_polish(point: NSPoint, rect: NSRect) {
-    let (cw, ch) = (rect.size.width / GX as f64, rect.size.height / GY as f64);
-    let radius = 18.0_f64;
-    POLISH.with(|cell| {
-        let mut mask = cell.borrow_mut();
-        if mask.len() != GX * GY {
-            mask.clear();
-            mask.resize(GX * GY, 0);
-        }
-        for (index, value) in mask.iter_mut().enumerate() {
-            let dx = ((index % GX) as f64 + 0.5) * cw - point.x;
-            let dy = ((index / GX) as f64 + 0.5) * ch - point.y;
-            let distance = (dx * dx + dy * dy).sqrt();
-            if distance < radius {
-                *value = (*value as u32 + (70.0 * (1.0 - distance / radius)) as u32).min(255) as u8;
-            }
-        }
-    });
 }

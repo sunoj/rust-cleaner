@@ -1,6 +1,7 @@
 // Squarified treemap of the targets a clean is working through: one tile per
-// target, tile area proportional to its bytes on disk, largest first.
-// Exports: `Tile`, tile state constants, `tiles`, `contains`.
+// target, tile area proportional to its bytes, laid out inside the crust region
+// the caller sizes against the volume.
+// Exports: `Tile`, tile state constants, `tiles`, `contains`, `rust_tone`.
 // Deps: crate::state, objc2_foundation geometry, wd40::disk.
 
 use crate::state::{CleanItemStatus, CleanProgress};
@@ -22,11 +23,12 @@ pub struct Tile {
 }
 
 /// The largest targets each get a tile; the rest collapse into one, so a queue
-/// of sixty node_modules does not become sixty unreadable slivers.
-pub fn tiles(p: &CleanProgress, width: f64, height: f64) -> Vec<Tile> {
+/// of sixty node_modules does not become sixty unreadable slivers. `region` is
+/// the share of the plate the crust is allowed to cover.
+pub fn tiles(p: &CleanProgress, region: NSRect) -> Vec<Tile> {
     let mut order: Vec<usize> = (0..p.items.len()).collect();
     order.sort_by(|a, b| p.items[*b].size_bytes.cmp(&p.items[*a].size_bytes));
-    let head = order.len().min(MAX_TILES);
+    let head = order.len().min(tile_cap(region));
     let mut sizes: Vec<f64> = Vec::new();
     let mut meta: Vec<(String, u64, u8)> = Vec::new();
     for &index in &order[..head] {
@@ -45,11 +47,33 @@ pub fn tiles(p: &CleanProgress, width: f64, height: f64) -> Vec<Tile> {
         sizes.push(bytes.max(1) as f64);
         meta.push((format!("{} smaller targets", tail.len()), bytes, state));
     }
-    squarify(&sizes, width, height)
+    squarify(&sizes, region.size.width, region.size.height)
         .into_iter()
         .zip(meta)
-        .map(|(rect, (name, size, state))| Tile { rect, name, size, state })
+        .map(|(rect, (name, size, state))| Tile {
+            rect: NSRect::new(
+                NSPoint::new(rect.origin.x + region.origin.x, rect.origin.y + region.origin.y),
+                rect.size,
+            ),
+            name,
+            size,
+            state,
+        })
         .collect()
+}
+
+/// A tile needs roughly 20×14pt before it can be seen or pointed at, so a small
+/// crust carries fewer of them rather than a fan of slivers.
+fn tile_cap(region: NSRect) -> usize {
+    ((region.size.width * region.size.height / 500.0) as usize).clamp(3, MAX_TILES)
+}
+
+/// The four rust tones the mock cycles through, shared with the residue film.
+pub fn rust_tone(index: usize) -> (f64, f64, f64) {
+    const RUST: [(f64, f64, f64); 4] = [
+        (0.545, 0.333, 0.2), (0.486, 0.275, 0.149), (0.584, 0.337, 0.18), (0.635, 0.376, 0.227),
+    ];
+    RUST[index % RUST.len()]
 }
 
 fn tile_state(status: CleanItemStatus) -> u8 {

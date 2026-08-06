@@ -82,6 +82,7 @@ pub fn content_view(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
 /// Rebuild popover content from current `AppState` (keeps it open if shown).
 pub fn refresh(mtm: MainThreadMarker) {
     ensure_popover(mtm);
+    crate::widgets::remember_scroll();
     let was_shown = POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|p| p.isShown()));
     let (view, height) = with_state_ret(|state| {
         update_status_button(state, mtm);

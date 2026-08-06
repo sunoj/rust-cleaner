@@ -19,7 +19,7 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use std::cell::Cell;
 use std::path::Path;
 use std::time::Instant;
-use wd40::disk::sum_bytes;
+use wd40::disk::{sum_bytes, DiskSpace};
 
 pub const TAG_STOP: isize = 2004;
 const STRIP_H: f64 = 46.0;
@@ -27,6 +27,8 @@ const PLATE_H: f64 = 190.0;
 const PLATE_BLOCK: f64 = PLATE_H + 46.0;
 const PATH_H: f64 = 42.0;
 const FOOTER_H: f64 = 78.0;
+/// Smallest crust worth drawing: below this a tile cannot be seen or hit.
+const MIN_CRUST: f64 = 26.0;
 
 thread_local! {
     /// When this run started, kept only so throughput can be measured.
@@ -47,7 +49,7 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
 
     draw_disk_header(&root, height, state, &progress, theme, mtm);
     let y = draw_strip(&root, height - header::HEADER_HEIGHT, &progress, elapsed, theme, mtm);
-    let y = draw_plate(&root, y, &progress, theme, mtm);
+    let y = draw_plate(&root, y, state, &progress, theme, mtm);
     draw_path(&root, y, &progress.current_path, theme, mtm);
     draw_footer(&root, theme, target, mtm);
     (root, height)
@@ -149,7 +151,7 @@ fn tick_clock(p: &CleanProgress) -> f64 {
                 None => true,
             };
         if fresh {
-            crate::plate::clear_polish();
+            crate::spray::clear_wiped();
         }
         let start = if fresh { now } else { cell.get().map_or(now, |value| value.0) };
         cell.set(Some((start, p.done_count, p.total_count)));
@@ -157,14 +159,49 @@ fn tick_clock(p: &CleanProgress) -> f64 {
     })
 }
 
-fn draw_plate(root: &NSView, y_top: f64, p: &CleanProgress, theme: &Theme, mtm: MainThreadMarker) -> f64 {
+fn draw_plate(root: &NSView, y_top: f64, state: &AppState, p: &CleanProgress, theme: &Theme, mtm: MainThreadMarker) -> f64 {
     let y = y_top - PLATE_BLOCK;
     let legend = label(root, "", PAD_X, y + 8.0, CONTENT_WIDTH, 16.0, 11.5, false, theme.ink_2, true, mtm);
     let frame = NSRect::new(NSPoint::new(PAD_X, y + 34.0), NSSize::new(CONTENT_WIDTH, PLATE_H));
-    let idle = format!("tile area = bytes on disk \u{00b7} {}/{} clear", p.done_count, p.total_count);
-    let view = plate_view(frame, p, legend, idle, theme.dark, mtm);
+    let job = sum_bytes(p.items.iter().map(|i| i.size_bytes));
+    let (crust, share) = crust_region(job, state.disk_stats());
+    let idle = format!("{share} \u{00b7} {}/{} clear", p.done_count, p.total_count);
+    let view = plate_view(frame, p, crust, legend, idle, theme.dark, mtm);
     root.addSubview(&view);
     y
+}
+
+/// How much of the plate the crust may cover: the share of the whole volume
+/// these targets occupy, so a nearly clean disk shows a nearly clean plate. The
+/// region keeps the plate's aspect ratio and hangs off the top-left corner.
+///
+/// Below `MIN_CRUST` the true region would be too small to see or point at, so
+/// it stops being to scale — the legend still carries the exact figure. With no
+/// volume size to divide by we do not invent one: the crust fills the plate and
+/// the legend says the drawing is not to scale.
+fn crust_region(job_bytes: u64, disk: Option<DiskSpace>) -> (NSRect, String) {
+    let plate = NSSize::new(CONTENT_WIDTH, PLATE_H);
+    let full = NSRect::new(NSPoint::new(0.0, 0.0), plate);
+    let Some(total) = disk.map(|d| d.total_bytes).filter(|total| *total > 0) else {
+        return (full, "volume size unknown \u{2014} not to scale".to_string());
+    };
+    let fraction = (job_bytes as f64 / total as f64).clamp(0.0, 1.0);
+    let scale = fraction.sqrt();
+    let w = (plate.width * scale).clamp(MIN_CRUST, plate.width);
+    let h = (plate.height * scale).clamp(MIN_CRUST * plate.height / plate.width, plate.height);
+    (
+        NSRect::new(NSPoint::new(0.0, plate.height - h), NSSize::new(w, h)),
+        format!("{} of the volume is crust", share_text(fraction)),
+    )
+}
+
+fn share_text(fraction: f64) -> String {
+    match fraction * 100.0 {
+        pct if pct >= 10.0 => format!("{pct:.0}%"),
+        pct if pct >= 1.0 => format!("{pct:.1}%"),
+        pct if pct >= 0.01 => format!("{pct:.2}%"),
+        _ => "under 0.01%".to_string(),
+    }
 }
 
 fn draw_path(root: &NSView, y_top: f64, current: &str, theme: &Theme, mtm: MainThreadMarker) {
@@ -185,7 +222,7 @@ fn draw_footer(root: &NSView, theme: &Theme, target: &AnyObject, mtm: MainThread
     );
     label_wrap(
         root,
-        "Rubbing the plate only polishes it \u{2014} a tile clears when its target is really gone. Nothing goes to the Trash.",
+        "Spray lifts residue off cleared steel; a tile goes only when its target is really gone. Nothing reaches the Trash.",
         PAD_X, 6.0, CONTENT_WIDTH, 30.0, 11.5, theme.ink_3, mtm,
     );
 }
@@ -201,12 +238,46 @@ fn ellipsize(path: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::short_duration;
+    use super::{crust_region, share_text, short_duration, MIN_CRUST, PLATE_H};
+    use crate::widgets::CONTENT_WIDTH;
+    use wd40::disk::DiskSpace;
+
+    fn disk(total: u64) -> Option<DiskSpace> {
+        Some(DiskSpace { free_bytes: total / 2, total_bytes: total })
+    }
 
     #[test]
     fn durations_read_in_seconds_then_minutes() {
         assert_eq!(short_duration(0.2), "1s");
         assert_eq!(short_duration(47.1), "48s");
         assert_eq!(short_duration(200.0), "4m");
+    }
+
+    #[test]
+    fn the_crust_covers_the_share_of_the_volume_it_occupies() {
+        let (quarter, share) = crust_region(250, disk(1000));
+        let area = quarter.size.width * quarter.size.height;
+        assert!((area / (CONTENT_WIDTH * PLATE_H) - 0.25).abs() < 0.01);
+        assert_eq!(share, "25% of the volume is crust");
+    }
+
+    #[test]
+    fn a_speck_of_crust_still_gets_a_hittable_patch() {
+        let (tiny, share) = crust_region(1, disk(10_000_000));
+        assert!(tiny.size.width >= MIN_CRUST);
+        assert_eq!(share, "under 0.01% of the volume is crust");
+    }
+
+    #[test]
+    fn without_a_volume_size_the_crust_fills_the_plate_and_says_so() {
+        let (full, share) = crust_region(500, None);
+        assert_eq!(full.size.width, CONTENT_WIDTH);
+        assert!(share.contains("not to scale"));
+    }
+
+    #[test]
+    fn share_text_keeps_small_fractions_readable() {
+        assert_eq!(share_text(0.061), "6.1%");
+        assert_eq!(share_text(0.0004), "0.04%");
     }
 }

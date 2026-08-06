@@ -9,7 +9,7 @@ use crate::medal::{medal, start_sheen, stop_sheen};
 use crate::state::{AppState, DoneSummary};
 use crate::theme::Theme;
 use crate::widgets::{
-    self, add_fill, add_line, label, label_right, label_wrap, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
+    self, add_fill, add_line, label, label_right, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -22,9 +22,6 @@ pub const TAG_DONE: isize = 2003;
 const DISC: f64 = 76.0;
 const HERO_H: f64 = 224.0;
 const ROW_H: f64 = 34.0;
-/// Tall enough for the longest note, which wraps to three lines at 12pt
-/// across the card's width. At 56 it clipped mid-sentence.
-const NOTE_H: f64 = 78.0;
 const FOOTER_H: f64 = 74.0;
 
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
@@ -32,7 +29,7 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
     let summary = state.done.as_ref();
     let rows = summary.map_or(0, |s| s.removed.len() + usize::from(s.skipped_count > 0));
     let height = match summary {
-        Some(_) => HERO_H + rows as f64 * ROW_H + NOTE_H + FOOTER_H,
+        Some(_) => HERO_H + rows as f64 * ROW_H + FOOTER_H,
         None => 64.0 + FOOTER_H,
     };
     let root = widgets::root_view(height, theme.surface, mtm);
@@ -47,7 +44,7 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
             if s.skipped_count > 0 {
                 y = draw_row(&root, y, s.skipped_count, "Left in place \u{2014} not selected", &scan_size(s.skipped_bytes), true, theme, mtm);
             }
-            draw_note(&root, y, s, theme, mtm);
+            let _ = y;
         }
         None => {
             label(&root, "Nothing was removed", PAD_X, height - 44.0, CONTENT_WIDTH, 22.0, 15.0, false, theme.ink_2, false, mtm);
@@ -112,17 +109,6 @@ fn draw_row(
     y
 }
 
-fn draw_note(root: &NSView, y_top: f64, s: &DoneSummary, theme: &Theme, mtm: MainThreadMarker) {
-    let card = add_fill(root, PAD_X, y_top - NOTE_H + 8.0, CONTENT_WIDTH, NOTE_H - 12.0, theme.paper, 1.0, 8.0, mtm);
-    card.setBorderWidth(1.0);
-    card.setBorderColor(&Theme::color(theme.line));
-    let text = match s.skipped_count {
-        0 => "Everything removed is gone for good \u{2014} nothing went to the Trash.".to_string(),
-        1 => "One target outside your selection was left untouched. Everything removed is gone for good \u{2014} nothing went to the Trash.".to_string(),
-        n => format!("{n} targets outside your selection were left untouched. Everything removed is gone for good \u{2014} nothing went to the Trash."),
-    };
-    label_wrap(root, &text, PAD_X + 12.0, y_top - NOTE_H + 14.0, CONTENT_WIDTH - 24.0, NOTE_H - 24.0, 12.0, theme.ink_2, mtm);
-}
 
 fn draw_footer(root: &NSView, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) {
     add_line(root, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);

@@ -16,6 +16,33 @@ pub const POPOVER_WIDTH: f64 = 380.0;
 pub const PAD_X: f64 = 16.0;
 pub const CONTENT_WIDTH: f64 = POPOVER_WIDTH - PAD_X * 2.0;
 
+thread_local! {
+    /// The live scroll view, so its position can be read before a rebuild.
+    static SCROLL: std::cell::RefCell<Option<Retained<NSScrollView>>> =
+        const { std::cell::RefCell::new(None) };
+    /// How far the list is scrolled from the top, in points.
+    static SCROLL_TOP: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Record where the list is scrolled to. Ticking a row rebuilds the whole view
+/// tree, and without this the list jumped back to the top every time — you had
+/// to find your place and scroll down again before ticking the next row.
+pub fn remember_scroll() {
+    SCROLL.with(|cell| {
+        let Some(scroll) = cell.borrow().clone() else { return };
+        let clip = scroll.contentView();
+        let doc_h = scroll.documentView().map_or(0.0, |d| d.frame().size.height);
+        let visible_h = clip.bounds().size.height;
+        SCROLL_TOP.set(((doc_h - visible_h) - clip.bounds().origin.y).max(0.0));
+    });
+}
+
+/// Send the next list back to the top — after a rescan the old offset would
+/// point into rows that no longer exist.
+pub fn reset_scroll() {
+    SCROLL_TOP.set(0.0);
+}
+
 /// The panel is an opaque surface, as the mock draws it. NSVisualEffectView was
 /// tried and dropped: behind-window vibrancy let the desktop through and made
 /// the design's flat mid-greys illegible, and the material had not settled the
@@ -56,11 +83,14 @@ pub fn scroll_document_view(
     scroll.setDocumentView(Some(&document));
     parent.addSubview(&scroll);
     // AppKit's origin is bottom-left, so an untouched scroll view opens showing
-    // the end of the document — the largest group scrolled off the top. Park
-    // the clip view at the top instead.
+    // the end of the document. Park it where the list was last left instead —
+    // at the top on a fresh list, since SCROLL_TOP starts at zero.
+    let top_of_document = document_h.max(h) - h;
+    let origin_y = (top_of_document - SCROLL_TOP.get()).clamp(0.0, top_of_document);
     let content = scroll.contentView();
-    content.setBoundsOrigin(NSPoint::new(0.0, document_h.max(h) - h));
+    content.setBoundsOrigin(NSPoint::new(0.0, origin_y));
     scroll.reflectScrolledClipView(&content);
+    SCROLL.with(|cell| *cell.borrow_mut() = Some(scroll));
     document
 }
 
