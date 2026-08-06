@@ -171,6 +171,25 @@ mod tests {
         }
     }
 
+    /// The red line for the toolchain kind: it must reach rustup and nothing
+    /// else. Pointed at a directory rustup has never heard of, the removal has
+    /// to come back empty-handed — an `rm` would have taken the directory with
+    /// it, so the directory still standing is the proof.
+    #[test]
+    fn a_toolchain_is_never_taken_off_by_an_unlink() {
+        let path = scratch("not-a-toolchain");
+        std::fs::create_dir_all(&path).expect("scratch dir");
+        std::fs::write(path.join("file"), vec![b'x'; 4096]).expect("scratch file");
+        let mut td = target(path.clone(), 4096);
+        td.kind = ArtifactKind::Toolchain;
+
+        let removal = remove_target(&td);
+        assert!(!matches!(removal, Removal::Gone), "rustup owns no such toolchain");
+        assert!(path.is_dir(), "the directory must survive — nothing may unlink it");
+        assert!(path.join("file").is_file(), "and so must what is inside it");
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
     #[test]
     fn a_missing_target_is_refused_rather_than_counted() {
         let removal = remove_target(&target(scratch("absent"), 10));

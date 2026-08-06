@@ -3,6 +3,7 @@
 pub mod cleaner;
 pub mod config;
 pub mod discover;
+pub mod extents;
 pub mod disk;
 pub mod nesting;
 pub mod roots;

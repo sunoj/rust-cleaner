@@ -22,8 +22,10 @@ shared blocks to one owner. Summing them counts the same physical blocks once
 per clone.
 
 This is not a WD-40 parsing bug — `du`, and Finder's "Get Info", report the
-same inflated numbers. The arithmetic is simply not recoverable from per-file
-metadata.
+same inflated numbers. The arithmetic is not recoverable from the per-file
+metadata `stat` returns — but it *is* recoverable from the extent map, which
+`stat` does not expose and `fcntl` does. See "The figure is recoverable after
+all".
 
 ## Evidence
 
@@ -57,6 +59,57 @@ nothing.
 Observed downstream: a peer session, reading the same inflated `du` figure,
 was about to prune four session target dirs expecting ~64G back. The real
 recovery would have been ~4G, leaving it still blocked.
+
+## The figure is recoverable after all
+
+Added 2026-08-06. The claim above that the number cannot be recovered was
+tested and is wrong. `fcntl(F_LOG2PHYS_EXT)` returns the *physical* device
+offset backing a logical range of a file. Clones report the same physical
+offsets as their source; an ordinary copy reports different ones:
+
+```
+orig    logical 0 -> phys 188260524032  len 1179648
+clone   logical 0 -> phys 188260524032  len 1179648   # identical: shared
+copy    logical 0 ->  phys 79764803584  len  262144   # different: its own
+```
+
+So the true figure is the union of every file's physical extents. Sort the
+(offset, length) pairs, merge overlaps, and the total is the number of distinct
+physical bytes the set occupies — which is what deleting all of it returns.
+
+Validated against a set whose answer is known by construction — an 8 MB file,
+a clone of it, and a real copy:
+
+```
+files 3   naive sum 24.00 M   unique physical 16.00 M   overcount 8.00 M
+```
+
+16 MB is exactly right: the original and the independent copy, with the clone
+contributing nothing of its own.
+
+On the real tree:
+
+```
+~/.cargo-target   99,758 files   152,383 extents
+naive sum        43.2 G
+unique physical   9.9 G
+overcount        33.3 G          # 4.4x
+```
+
+Cost: 8.19 s wall for 99,758 files, of which 0.17 s is user time and 6.14 s is
+system — it is bound by one `open` plus a handful of `fcntl` calls per file,
+not by computation. The `getattrlistbulk` path measures the same tree in about
+0.87 s, so exactness costs roughly 9x. That is affordable only alongside a size
+cache, and only where clones are plausible: `sizes_may_overlap` already names
+that set.
+
+### The limit of the method
+
+The union is exact *within the set it is given*. A physical block also
+referenced by a file outside the set is not reclaimable, and unioning cannot
+see that reference, so such a block is still counted. Establishing it would
+mean reading the extent map of everything outside the set. The honest claim is
+"exact within the selection", not "exact".
 
 ## Fix options
 
