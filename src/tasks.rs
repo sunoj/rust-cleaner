@@ -1,24 +1,29 @@
 // Background scan/clean orchestration for the WD-40 popover app.
 // Exports: scan/clean spawners, timer control, main-thread completion hooks.
-// Deps: objc2, libdispatch FFI, crate::{names, popover, state, tasks_clean}.
+// Deps: objc2, crate::{live, mainthread, names, popover, state, tasks_clean}.
 
-use crate::names::display_names;
-use crate::tasks_clean;
+use crate::live;
 use crate::popover;
 use crate::state::{
-    with_state, with_state_ret, CleanItem, CleanItemStatus, CleanProgress, DoneSummary, UiScreen,
+    with_state, with_state_ret, CleanProgress, DoneSummary, UiScreen,
 };
+use crate::tasks_clean::{self, gather_job, initial_progress, CleanJob};
 use crate::{MenuHandler, HANDLER};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, sel};
+use objc2::sel;
 use objc2_foundation::{MainThreadMarker, NSTimer};
+use crate::mainthread::{
+    clean_done_trampoline, dispatch_to_main, progress_trampoline, scan_done_trampoline,
+    sizes_done_trampoline, sizes_tick_trampoline,
+};
 use std::cell::RefCell;
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use wd40::disk::disk_space;
-use wd40::scanner::{scan_discover, scan_sizes, TargetDir};
+use wd40::discover::scan_discover;
+use wd40::scanner::TargetDir;
+use wd40::sizes::size_targets;
 
 const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
 
@@ -27,9 +32,13 @@ static SCANNING: AtomicBool = AtomicBool::new(false);
 static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
-static SIZES_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
 static PROGRESS: Mutex<Option<CleanProgress>> = Mutex::new(None);
+/// Sizes that have settled but not yet reached the screen.
+static SIZES: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
+/// One pending hop to the main thread at a time, however fast sizes arrive.
+static SIZE_HOP: AtomicBool = AtomicBool::new(false);
+static PROGRESS_HOP: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static AUTO_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
@@ -38,6 +47,11 @@ thread_local! {
 
 pub fn is_busy() -> bool {
     CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed)
+}
+
+/// True once the user has asked the current run to stop starting new targets.
+pub fn stop_requested() -> bool {
+    STOP_AFTER.load(Ordering::Relaxed)
 }
 
 pub fn start_scan(then_clean: bool) {
@@ -65,36 +79,60 @@ pub fn start_scan(then_clean: bool) {
 pub fn on_scan_done(mtm: MainThreadMarker) {
     // A new scan replaces the rows, so the remembered offset would point at
     // targets that are no longer there.
-    crate::widgets::reset_scroll();
+    crate::scrolling::reset_scroll();
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
         return;
     };
+    SIZES.lock().unwrap().clear();
     with_state(|state| {
         state.targets = targets;
+        state.measured.clear();
         state.reset_selection();
     });
     popover::refresh(mtm);
-    let mut pending: Vec<TargetDir> = with_state_ret(|state| {
-        state.targets.iter().map(|td| TargetDir { size_bytes: 0, ..td.clone() }).collect()
-    })
-    .unwrap_or_default();
+    let pending: Vec<TargetDir> =
+        with_state_ret(|state| state.targets.clone()).unwrap_or_default();
     std::thread::spawn(move || {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_sizes(&mut pending)));
-        *SIZES_RESULT.lock().unwrap() = Some(pending);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            size_targets(&pending, |sized| {
+                SIZES.lock().unwrap().push((sized.index, sized.bytes));
+                if !SIZE_HOP.swap(true, Ordering::SeqCst) {
+                    dispatch_to_main(sizes_tick_trampoline);
+                }
+            });
+        }));
         dispatch_to_main(sizes_done_trampoline);
     });
 }
 
-pub fn on_sizes_done(mtm: MainThreadMarker) {
-    SCANNING.store(false, Ordering::Relaxed);
-    if let Some(targets) = SIZES_RESULT.lock().unwrap().take() {
-        with_state(|state| {
-            state.targets = targets;
-            state.reset_selection();
-        });
+/// Sizes that settled since the last hop. Patches the rows in place — the list
+/// keeps its order and its scroll position until the whole pass is done.
+pub fn on_sizes_tick(mtm: MainThreadMarker) {
+    SIZE_HOP.store(false, Ordering::SeqCst);
+    let arrived = std::mem::take(&mut *SIZES.lock().unwrap());
+    if arrived.is_empty() {
+        return;
+    }
+    let indices: Vec<usize> = arrived.iter().map(|(index, _)| *index).collect();
+    with_state(|state| {
+        for (index, bytes) in arrived {
+            state.apply_size(index, bytes);
+        }
+    });
+    if !live::sizes_arrived(&indices, mtm) {
         popover::refresh(mtm);
     }
+    popover::refresh_status(mtm);
+}
+
+pub fn on_sizes_done(mtm: MainThreadMarker) {
+    SCANNING.store(false, Ordering::Relaxed);
+    on_sizes_tick(mtm);
+    // Only now is there a full set of figures to sort by, so this is the one
+    // point at which rows are allowed to move.
+    with_state(|state| state.finish_sizing());
+    popover::refresh(mtm);
     #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
     if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
@@ -104,47 +142,14 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
 
 /// Clean exactly the checked items. Irreversible; nothing else is touched.
 pub fn spawn_clean_selected() {
-    let Some(work) = with_state_ret(|state| {
-        let names = display_names(&state.targets);
-        let items: Vec<(usize, TargetDir, String)> = state
-            .selected
-            .iter()
-            .copied()
-            .filter_map(|i| state.targets.get(i).map(|td| (i, td.clone(), names[i].clone())))
-            .collect();
-        let skipped_count = state.targets.len().saturating_sub(items.len());
-        let skipped_bytes = state
-            .targets
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !state.selected.contains(i))
-            .map(|(_, td)| td.size_bytes)
-            .fold(0_u64, |a, b| a.saturating_add(b));
-        (items, skipped_count, skipped_bytes, state.reference_path())
-    }) else {
-        return;
-    };
-    let (items, skipped_count, skipped_bytes, reference) = work;
+    let Some(job) = gather_job() else { return };
+    let CleanJob { items, skipped_count, skipped_bytes, reference } = job;
     if items.is_empty() || CLEANING.swap(true, Ordering::Relaxed) {
         return;
     }
     STOP_AFTER.store(false, Ordering::Relaxed);
     let before = reference.as_deref().and_then(disk_space);
-    let progress = CleanProgress {
-        items: items
-            .iter()
-            .map(|(index, td, name)| CleanItem {
-                index: *index,
-                name: name.clone(),
-                size_bytes: td.size_bytes,
-                status: CleanItemStatus::Pending,
-            })
-            .collect(),
-        freed_so_far: 0,
-        current_path: String::new(),
-        done_count: 0,
-        total_count: items.len(),
-    };
+    let progress = initial_progress(&items);
     *PROGRESS.lock().unwrap() = Some(progress.clone());
     with_state(|state| {
         state.screen = UiScreen::Cleaning;
@@ -165,7 +170,9 @@ pub fn spawn_clean_selected() {
             progress,
             |p| {
                 *PROGRESS.lock().unwrap() = Some(p.clone());
-                dispatch_to_main(progress_trampoline);
+                if !PROGRESS_HOP.swap(true, Ordering::SeqCst) {
+                    dispatch_to_main(progress_trampoline);
+                }
             },
             &STOP_AFTER,
         );
@@ -175,13 +182,23 @@ pub fn spawn_clean_selected() {
 }
 
 pub fn on_progress(mtm: MainThreadMarker) {
+    PROGRESS_HOP.store(false, Ordering::SeqCst);
     let snapshot = PROGRESS.lock().unwrap().clone();
     with_state(|state| state.cleaning = snapshot);
-    popover::refresh(mtm);
+    if !live::progress_changed(mtm) {
+        popover::refresh(mtm);
+    }
 }
 
 pub fn request_stop() {
     STOP_AFTER.store(true, Ordering::Relaxed);
+    // Say so straight away: the button has to stop offering what it has
+    // already been asked to do.
+    if let Some(mtm) = MainThreadMarker::new() {
+        if !live::progress_changed(mtm) {
+            popover::refresh(mtm);
+        }
+    }
 }
 
 pub fn on_clean_done(mtm: MainThreadMarker) {
@@ -230,35 +247,4 @@ fn stop_timer(slot: &'static TimerSlot) {
             timer.invalidate();
         }
     });
-}
-
-fn dispatch_to_main(work: extern "C" fn(*mut c_void)) {
-    unsafe {
-        dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q), std::ptr::null_mut(), work);
-    }
-}
-
-macro_rules! trampoline {
-    ($name:ident, $selector:ident) => {
-        extern "C" fn $name(_ctx: *mut c_void) {
-            HANDLER.with(|cell| {
-                if let Some(handler) = cell.borrow().as_ref() {
-                    let obj: &AnyObject =
-                        unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-                    let _: () = unsafe { msg_send![obj, $selector: std::ptr::null::<AnyObject>()] };
-                }
-            });
-        }
-    };
-}
-
-trampoline!(scan_done_trampoline, scanDone);
-trampoline!(sizes_done_trampoline, sizesDone);
-trampoline!(clean_done_trampoline, cleanDone);
-trampoline!(progress_trampoline, cleanProgress);
-
-#[link(name = "System", kind = "dylib")]
-extern "C" {
-    static _dispatch_main_q: c_void;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }

@@ -4,10 +4,11 @@
 // behind. Exports: `plate_view`. Deps: crate::{header, metal, spray, treemap}.
 
 use crate::header::scan_size;
-use crate::metal::{brushed, grey, inset, outline, reduce_motion, rings, rnd};
+use crate::metal::{brushed, grey, inset, outline, reduce_motion, rings};
 use crate::spray::{draw_film, draw_nozzle, wipe, Mist};
 use crate::state::CleanProgress;
-use crate::treemap::{contains, rust_tone, tiles, Tile, ACTIVE, DONE, SKIPPED};
+use crate::crust::{draw_tile, phase};
+use crate::treemap::{contains, tiles, Tile};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
@@ -25,11 +26,15 @@ thread_local! {
 }
 
 pub struct PlateIvars {
-    tiles: Vec<Tile>,
+    /// Replaced in place as the run advances. Rebuilding the whole view for
+    /// each tile that comes off took the hover and the spray in flight with it.
+    tiles: RefCell<Vec<Tile>>,
     hover: Cell<isize>,
     /// Tile names live under the plate, not on it: small tiles have no room.
     legend: Retained<NSTextField>,
-    idle: String,
+    /// How much of the volume this job is, fixed for the run.
+    share: String,
+    idle: RefCell<String>,
     dark: bool,
     /// Reduce Motion: the wipe still lands, the mist never travels.
     still: bool,
@@ -147,14 +152,18 @@ impl PlateView {
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 10.0, 10.0).addClip();
         brushed(bounds, ivars.dark);
         rings(NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0), bounds.size.height * 0.44, ivars.dark);
-        draw_film(bounds, &ivars.tiles);
-        for (index, tile) in ivars.tiles.iter().enumerate() {
+        let tiles = ivars.tiles.borrow();
+        draw_film(bounds, &tiles);
+        for (index, tile) in tiles.iter().enumerate() {
             draw_tile(index, tile);
         }
-        if let Some(tile) = self.hovered() {
-            grey(1.0, 0.8).setStroke();
-            outline(inset(tile.rect, 1.0), 1.5);
-        }
+        drop(tiles);
+        self.hovered(|tile| {
+            if let Some(tile) = tile {
+                grey(1.0, 0.8).setStroke();
+                outline(inset(tile.rect, 1.0), 1.5);
+            }
+        });
         ivars.mist.borrow().draw();
         if ivars.inside.get() {
             draw_nozzle(ivars.pointer.get(), ivars.spraying.get());
@@ -165,16 +174,30 @@ impl PlateView {
         edge.stroke();
     }
 
-    fn hovered(&self) -> Option<&Tile> {
-        usize::try_from(self.ivars().hover.get())
-            .ok()
-            .and_then(|index| self.ivars().tiles.get(index))
+    /// Hand the hovered tile to `body`; the tiles live behind a borrow now.
+    fn hovered<R>(&self, body: impl FnOnce(Option<&Tile>) -> R) -> R {
+        let tiles = self.ivars().tiles.borrow();
+        let index = usize::try_from(self.ivars().hover.get()).ok();
+        body(index.and_then(|index| tiles.get(index)))
+    }
+
+    /// Take the run's new state without rebuilding the view.
+    pub fn update(&self, progress: &CleanProgress, crust: NSRect) {
+        let ivars = self.ivars();
+        *ivars.tiles.borrow_mut() = tiles(progress, crust);
+        *ivars.idle.borrow_mut() = idle_text(&ivars.share, progress);
+        let hover = ivars.hover.get();
+        if usize::try_from(hover).is_ok_and(|index| index >= ivars.tiles.borrow().len()) {
+            ivars.hover.set(-1);
+        }
+        self.refresh_legend();
+        self.setNeedsDisplay(true);
     }
 
     /// One puff: wipe what the nozzle covers, then throw off mist.
     fn burst(&self, point: NSPoint) {
         let ivars = self.ivars();
-        wipe(point, self.bounds(), &ivars.tiles);
+        wipe(point, self.bounds(), &ivars.tiles.borrow());
         if !ivars.still {
             ivars.mist.borrow_mut().emit(point);
         }
@@ -188,6 +211,7 @@ impl PlateView {
         ivars.inside.set(true);
         let hit = ivars
             .tiles
+            .borrow()
             .iter()
             .position(|tile| contains(tile.rect, point))
             .map_or(-1, |index| index as isize);
@@ -199,20 +223,16 @@ impl PlateView {
     }
 
     fn refresh_legend(&self) {
-        let text = match self.hovered() {
-            Some(tile) => {
-                let phase = match tile.state {
-                    DONE => "removed",
-                    ACTIVE => "removing",
-                    SKIPPED => "left in place",
-                    _ => "waiting",
-                };
-                format!("{} \u{00b7} {} \u{00b7} {phase}", tile.name, scan_size(tile.size))
-            }
-            None => self.ivars().idle.clone(),
-        };
+        let text = self.hovered(|tile| match tile {
+            Some(tile) => format!("{} \u{00b7} {} \u{00b7} {}", tile.name, scan_size(tile.size), phase(tile.state)),
+            None => self.ivars().idle.borrow().clone(),
+        });
         self.ivars().legend.setStringValue(&NSString::from_str(&text));
     }
+}
+
+fn idle_text(share: &str, progress: &CleanProgress) -> String {
+    format!("{share} \u{00b7} {}/{} clear", progress.done_count, progress.total_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -221,16 +241,17 @@ pub fn plate_view(
     progress: &CleanProgress,
     crust: NSRect,
     legend: Retained<NSTextField>,
-    idle: String,
+    share: String,
     dark: bool,
     mtm: MainThreadMarker,
 ) -> Retained<PlateView> {
     stop_mist();
     let view = mtm.alloc::<PlateView>().set_ivars(PlateIvars {
-        tiles: tiles(progress, crust),
+        tiles: RefCell::new(tiles(progress, crust)),
         hover: Cell::new(-1),
         legend,
-        idle,
+        idle: RefCell::new(idle_text(&share, progress)),
+        share,
         dark,
         still: reduce_motion(),
         pointer: Cell::new(NSPoint::new(-100.0, -100.0)),
@@ -263,30 +284,4 @@ fn stop_mist() {
             timer.invalidate();
         }
     });
-}
-
-/// Crust still on disk. Cleared tiles are drawn by the residue film instead.
-fn draw_tile(index: usize, tile: &Tile) {
-    if tile.state == DONE || tile.rect.size.width < 0.5 {
-        return;
-    }
-    let alpha = if tile.state == SKIPPED { 0.5 } else { 1.0 };
-    let (r, g, b) = rust_tone(index);
-    NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, alpha).setFill();
-    NSBezierPath::fillRect(tile.rect);
-    let mut seed = 0x9e37_79b9_u32 ^ (index as u32).wrapping_mul(2_654_435_761);
-    let pits = ((tile.rect.size.width * tile.rect.size.height / 220.0) as usize).clamp(6, 70);
-    for _ in 0..pits {
-        let cx = tile.rect.origin.x + rnd(&mut seed) * tile.rect.size.width;
-        let cy = tile.rect.origin.y + rnd(&mut seed) * tile.rect.size.height;
-        let (pr, pg, pb) = if rnd(&mut seed) > 0.5 { (0.769, 0.529, 0.31) } else { (0.29, 0.173, 0.106) };
-        NSColor::colorWithSRGBRed_green_blue_alpha(pr, pg, pb, (0.1 + rnd(&mut seed) * 0.26) * alpha).setFill();
-        crate::metal::circle_path(NSPoint::new(cx, cy), 1.5 + rnd(&mut seed) * 5.5).fill();
-    }
-    NSColor::colorWithSRGBRed_green_blue_alpha(0.118, 0.067, 0.035, 0.55 * alpha).setStroke();
-    outline(inset(tile.rect, 0.5), 1.0);
-    if tile.state == ACTIVE {
-        NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.94, 0.86, 0.75).setStroke();
-        outline(inset(tile.rect, 1.5), 2.0);
-    }
 }

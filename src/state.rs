@@ -31,7 +31,19 @@ pub enum CleanItemStatus {
     Pending,
     Active,
     Done,
+    /// Removal stopped part way: some of it went, the rest is still on disk.
+    Partial,
+    /// Nothing was removed.
+    Failed,
+    /// Never started, because the run was stopped first.
     Skipped,
+}
+
+impl CleanItemStatus {
+    /// True once this item will not change again.
+    pub fn settled(self) -> bool {
+        !matches!(self, Self::Pending | Self::Active)
+    }
 }
 
 #[derive(Clone)]
@@ -40,6 +52,8 @@ pub struct CleanItem {
     pub index: usize,
     pub name: String,
     pub size_bytes: u64,
+    /// What this item actually returned — below `size_bytes` when it went part way.
+    pub freed_bytes: u64,
     pub status: CleanItemStatus,
 }
 
@@ -47,9 +61,24 @@ pub struct CleanItem {
 pub struct CleanProgress {
     pub items: Vec<CleanItem>,
     pub freed_so_far: u64,
+    /// The target most recently picked up; several run at once.
     pub current_path: String,
     pub done_count: usize,
     pub total_count: usize,
+}
+
+impl CleanProgress {
+    pub fn active_count(&self) -> usize {
+        self.items.iter().filter(|item| item.status == CleanItemStatus::Active).count()
+    }
+
+    /// Items that were touched but did not come off cleanly.
+    pub fn troubled_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item.status, CleanItemStatus::Partial | CleanItemStatus::Failed))
+            .count()
+    }
 }
 
 #[derive(Clone)]
@@ -69,11 +98,16 @@ pub struct DoneSummary {
     pub removed: Vec<GroupSummary>,
     pub skipped_count: usize,
     pub skipped_bytes: u64,
+    /// Targets that were started but did not come off cleanly.
+    pub troubled_count: usize,
 }
 
 pub(crate) struct AppState {
     pub config: Config,
     pub targets: Vec<TargetDir>,
+    /// Positions in `targets` whose size has settled. Anything not in here has
+    /// no figure yet and must never be drawn as though it had one.
+    pub measured: HashSet<usize>,
     pub selected: HashSet<usize>,
     pub show_all: bool,
     pub screen: UiScreen,
@@ -84,12 +118,63 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    /// True while sizes are still arriving, so every total on screen is a floor
+    /// rather than an answer.
+    pub fn sizing(&self) -> bool {
+        !self.targets.is_empty() && self.measured.len() < self.targets.len()
+    }
+
+    /// Sum of what has been measured. During a scan this only ever grows.
     pub fn total_size(&self) -> u64 {
         sum_bytes(self.targets.iter().map(|t| t.size_bytes))
     }
 
     pub fn selected_size(&self) -> u64 {
         selected_bytes(&self.targets, &self.selected)
+    }
+
+    pub fn group_size(&self, group: ArtifactGroup) -> u64 {
+        sum_bytes(
+            self.targets
+                .iter()
+                .filter(|t| t.kind.group() == group)
+                .map(|t| t.size_bytes),
+        )
+    }
+
+    /// True when every target in this group has a settled size.
+    pub fn group_settled(&self, group: ArtifactGroup) -> bool {
+        self.targets
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.kind.group() == group)
+            .all(|(index, _)| self.measured.contains(&index))
+    }
+
+    /// Record one settled size. Row order is deliberately left alone until the
+    /// pass is over: re-sorting on every arrival would shuffle the list under
+    /// the pointer while the user is reading it.
+    pub fn apply_size(&mut self, index: usize, bytes: u64) {
+        if let Some(target) = self.targets.get_mut(index) {
+            target.size_bytes = bytes;
+            self.measured.insert(index);
+        }
+    }
+
+    /// Sort largest first now that every figure is in, carrying the ticks with
+    /// their targets — a selection is a promise about paths, not positions.
+    pub fn finish_sizing(&mut self) {
+        let mut order: Vec<usize> = (0..self.targets.len()).collect();
+        order.sort_by_key(|index| std::cmp::Reverse(self.targets[*index].size_bytes));
+        let selected: HashSet<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, old)| self.selected.contains(old))
+            .map(|(new, _)| new)
+            .collect();
+        self.targets = order.iter().map(|index| self.targets[*index].clone()).collect();
+        self.measured = (0..self.targets.len()).collect();
+        self.selected = selected;
     }
 
     pub fn reference_path(&self) -> Option<PathBuf> {

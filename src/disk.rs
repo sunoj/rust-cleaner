@@ -21,9 +21,9 @@ pub fn disk_space(path: &Path) -> Option<DiskSpace> {
     }
 
     let stats = unsafe { stats.assume_init() };
-    let block_size = u64::try_from(stats.f_bsize).ok()?;
-    let free_blocks = u64::try_from(stats.f_bavail).ok()?;
-    let total_blocks = u64::try_from(stats.f_blocks).ok()?;
+    let block_size = u64::from(stats.f_bsize);
+    let free_blocks = stats.f_bavail;
+    let total_blocks = stats.f_blocks;
 
     Some(DiskSpace {
         free_bytes: block_size.saturating_mul(free_blocks),

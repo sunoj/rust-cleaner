@@ -49,6 +49,17 @@ pub fn draw_header(parent: &NSView, y_top: f64, model: &HeaderModel, theme: &The
 
     draw_gauge(parent, y_top - 42.0, disk, if model.sizing { 0 } else { model.reclaimable }, theme, mtm);
 
+    draw_detail(parent, y_top, disk, model, theme, mtm);
+}
+
+fn draw_detail(
+    parent: &NSView,
+    y_top: f64,
+    disk: DiskSpace,
+    model: &HeaderModel,
+    theme: &Theme,
+    mtm: MainThreadMarker,
+) {
     let left = model.detail_left.clone().unwrap_or_else(|| {
         if model.sizing {
             "Measuring build artifacts\u{2026}".into()
@@ -59,14 +70,15 @@ pub fn draw_header(parent: &NSView, y_top: f64, model: &HeaderModel, theme: &The
     });
     add_fill(parent, PAD_X, y_top - 62.0, 7.0, 7.0, theme.accent, 1.0, 2.0, mtm);
     label(parent, &left, PAD_X + 14.0, y_top - 66.0, 200.0, 16.0, 13.0, false, theme.ink, false, mtm);
-    if let Some(right) = &model.detail_right {
-        label_right(
-            parent, right, PAD_X + 180.0, y_top - 66.0, CONTENT_WIDTH - 180.0, 16.0, 11.5,
-            theme.ink_3, true, mtm,
-        );
-    } else if !model.sizing && model.reclaimable > 0 && model.detail_left.is_none() {
-        let after = disk.free_bytes.saturating_add(model.reclaimable).min(disk.total_bytes);
-        let right = format!("\u{2192} {} free", human_size(after));
+    let right = match &model.detail_right {
+        Some(right) => Some(right.clone()),
+        None if !model.sizing && model.reclaimable > 0 && model.detail_left.is_none() => {
+            let after = disk.free_bytes.saturating_add(model.reclaimable).min(disk.total_bytes);
+            Some(format!("\u{2192} {} free", human_size(after)))
+        }
+        None => None,
+    };
+    if let Some(right) = right {
         label_right(
             parent, &right, PAD_X + 180.0, y_top - 66.0, CONTENT_WIDTH - 180.0, 16.0, 11.5,
             theme.ink_3, true, mtm,
@@ -74,18 +86,35 @@ pub fn draw_header(parent: &NSView, y_top: f64, model: &HeaderModel, theme: &The
     }
 }
 
-pub fn draw_scan_header(
-    parent: &NSView,
-    y_top: f64,
-    disk: Option<DiskSpace>,
-    reclaimable: u64,
-    sizing: bool,
-    theme: &Theme,
-    mtm: MainThreadMarker,
-) {
+/// The scan header's model. While `measured` is short of `total` every figure
+/// derived from it is a floor, and the header says so rather than letting a
+/// number that is still climbing read as an answer.
+pub struct ScanHeader {
+    pub disk: Option<DiskSpace>,
+    pub reclaimable: u64,
+    pub measured: usize,
+    pub total: usize,
+}
+
+impl ScanHeader {
+    pub fn sizing(&self) -> bool {
+        self.measured < self.total
+    }
+
+    /// Marks a total that is still being added to.
+    fn floor(&self) -> &'static str {
+        if self.sizing() {
+            "\u{2265} "
+        } else {
+            ""
+        }
+    }
+}
+
+pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: &Theme, mtm: MainThreadMarker) {
     let y = y_top - SCAN_HEADER_HEIGHT;
     add_line(parent, 0.0, y, widgets::POPOVER_WIDTH, theme.line, mtm);
-    let Some(disk) = disk else {
+    let Some(disk) = model.disk else {
         label(parent, "Disk unavailable", PAD_X, y_top - 38.0, CONTENT_WIDTH, 24.0, 14.0, false, theme.ink_2, false, mtm);
         return;
     };
@@ -94,27 +123,28 @@ pub fn draw_scan_header(
     label_tracked(parent, &free, PAD_X, y_top - 38.0, 220.0, 24.0, 20.0, true, theme.ink, false, -0.28, mtm);
     label_right(parent, &format!("of {}", scan_size(disk.total_bytes)), PAD_X + 200.0, y_top - 35.0, CONTENT_WIDTH - 200.0, 16.0, 11.5, theme.ink_3, true, mtm);
 
-    draw_scan_gauge(parent, y_top - 59.0, disk, reclaimable, theme, mtm);
     let used = disk.total_bytes.saturating_sub(disk.free_bytes).min(disk.total_bytes);
-    let reclaimable = reclaimable.min(used);
+    let reclaimable = model.reclaimable.min(used);
+    draw_scan_gauge(parent, y_top - 59.0, disk, reclaimable, theme, mtm);
     draw_legend_row(
         parent,
         y_top - 86.0,
         [
-            ("Reclaimable", wd40::scanner::human_size(reclaimable), theme.accent),
-            ("In use", wd40::scanner::human_size(used.saturating_sub(reclaimable)), theme.ink_4),
-            ("Free", wd40::scanner::human_size(disk.free_bytes), theme.pos),
+            ("Reclaimable", format!("{}{}", model.floor(), human_size(reclaimable)), theme.accent),
+            ("In use", human_size(used.saturating_sub(reclaimable)), theme.ink_4),
+            ("Free", human_size(disk.free_bytes), theme.pos),
         ],
         theme,
         mtm,
     );
 
-    let after = if sizing {
-        disk.free_bytes
-    } else {
-        disk.free_bytes.saturating_add(reclaimable).min(disk.total_bytes)
-    };
-    label(parent, &format!("\u{2192} {} free after cleaning", scan_size(after)), PAD_X, y_top - 112.0, CONTENT_WIDTH, 16.0, 11.5, false, theme.ink_3, true, mtm);
+    let after = disk.free_bytes.saturating_add(reclaimable).min(disk.total_bytes);
+    let bound = if model.sizing() { "at least " } else { "" };
+    label(parent, &format!("\u{2192} {bound}{} free after cleaning", scan_size(after)), PAD_X, y_top - 112.0, 230.0, 16.0, 11.5, false, theme.ink_3, true, mtm);
+    if model.sizing() {
+        let counted = format!("{} of {} measured", model.measured, model.total);
+        label_right(parent, &counted, PAD_X + 230.0, y_top - 112.0, CONTENT_WIDTH - 230.0, 16.0, 11.5, theme.ink_3, true, mtm);
+    }
 }
 
 fn draw_scan_gauge(

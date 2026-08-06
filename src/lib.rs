@@ -2,5 +2,10 @@
 // Used by both the macOS menu bar app and the CLI.
 pub mod cleaner;
 pub mod config;
+pub mod discover;
 pub mod disk;
+pub mod nesting;
+pub mod roots;
 pub mod scanner;
+pub mod sizes;
+mod walk;

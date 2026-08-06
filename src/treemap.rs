@@ -14,6 +14,10 @@ pub const PENDING: u8 = 0;
 pub const ACTIVE: u8 = 1;
 pub const DONE: u8 = 2;
 pub const SKIPPED: u8 = 3;
+/// Started, but only part of it left the disk.
+pub const PART_GONE: u8 = 4;
+/// Started, and none of it left the disk.
+pub const BLOCKED: u8 = 5;
 
 pub struct Tile {
     pub rect: NSRect,
@@ -82,6 +86,8 @@ fn tile_state(status: CleanItemStatus) -> u8 {
         CleanItemStatus::Active => ACTIVE,
         CleanItemStatus::Done => DONE,
         CleanItemStatus::Skipped => SKIPPED,
+        CleanItemStatus::Partial => PART_GONE,
+        CleanItemStatus::Failed => BLOCKED,
     }
 }
 

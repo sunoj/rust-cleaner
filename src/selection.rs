@@ -15,6 +15,16 @@ pub enum GroupSelection {
     On,
 }
 
+/// A single row is only ever on or off; only a group can be part-ticked.
+impl From<bool> for GroupSelection {
+    fn from(on: bool) -> Self {
+        match on {
+            true => Self::On,
+            false => Self::Off,
+        }
+    }
+}
+
 /// True when the artifact is newer than `max_age_days` (still "recent").
 pub fn is_recent(target: &TargetDir, max_age_days: u64) -> bool {
     let max_age = Duration::from_secs(max_age_days.saturating_mul(SECONDS_PER_DAY));

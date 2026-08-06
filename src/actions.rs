@@ -12,8 +12,12 @@ use wd40::config::{merge_artifact_types, ARTIFACT_DIRS};
 
 pub fn toggle_item(tag: isize, mtm: MainThreadMarker) {
     let index = (tag - crate::scan_view::TAG_ITEM_BASE) as usize;
+    // Ticking a row is the smallest state change the app has; it repaints the
+    // box and the button, and leaves the list exactly where it was.
     with_state(|state| state.toggle_selected(index));
-    popover::refresh(mtm);
+    if !crate::live::selection_changed(mtm) {
+        popover::refresh(mtm);
+    }
 }
 
 pub fn done_ack(mtm: MainThreadMarker) {

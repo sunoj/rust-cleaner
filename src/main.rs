@@ -4,19 +4,26 @@
 
 mod actions;
 mod autostart;
+mod checkbox;
 mod clean_view;
 mod controls;
+mod crust;
 mod disk_gauge;
 mod done_view;
 mod header;
 mod hover_row;
 mod icon;
+mod live;
 mod medal;
 mod menu_rows;
 mod metal;
+mod motion;
+mod mainthread;
 mod names;
 mod plate;
 mod popover;
+mod scan_rows;
+mod scrolling;
 mod scan_view;
 #[cfg(debug_assertions)]
 mod screenshot;
@@ -70,7 +77,9 @@ define_class!(
             let index = (sender.tag() - scan_view::TAG_GROUP_BASE) as usize;
             let Some(&group) = wd40::scanner::ArtifactGroup::ALL.get(index) else { return };
             with_state(|state| selection::toggle_group(&state.targets, &mut state.selected, group));
-            popover::refresh(self.mtm());
+            if !live::selection_changed(self.mtm()) {
+                popover::refresh(self.mtm());
+            }
         }
 
         #[unsafe(method(handleCleanSelected:))]
@@ -159,6 +168,11 @@ define_class!(
             tasks::on_scan_done(self.mtm());
         }
 
+        #[unsafe(method(sizesTick:))]
+        fn sizes_tick(&self, _sender: *mut AnyObject) {
+            tasks::on_sizes_tick(self.mtm());
+        }
+
         #[unsafe(method(sizesDone:))]
         fn sizes_done(&self, _sender: *mut AnyObject) {
             tasks::on_sizes_done(self.mtm());
@@ -207,6 +221,7 @@ fn main() {
     state::install(AppState {
         config,
         targets: Vec::new(),
+        measured: Default::default(),
         selected: Default::default(),
         show_all: false,
         screen: UiScreen::Scan,

@@ -2,34 +2,19 @@
 // Exports: button/checkbox/switch/slider helpers used by views.
 // Deps: crate::{theme, widgets}, objc2 AppKit.
 
+use crate::style::attributed;
 use crate::theme::Theme;
-use crate::widgets::add_fill;
+use crate::widgets::{add_fill, fitted_width};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSButton, NSButtonType, NSColor, NSEventModifierFlags, NSFont, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSUnderlineStyleAttributeName, NSSlider,
+    NSForegroundColorAttributeName, NSSlider, NSUnderlineStyleAttributeName,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSNumber, NSString,
+    MainThreadMarker, NSAttributedString, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString,
 };
-
-fn attributed(text: &str, rgb: (f64, f64, f64), size: f64, bold: bool) -> Retained<NSAttributedString> {
-    let font = if bold {
-        NSFont::boldSystemFontOfSize(size)
-    } else {
-        NSFont::systemFontOfSize(size)
-    };
-    let color = Theme::color(rgb);
-    let font_obj: &AnyObject = unsafe { &*(&*font as *const NSFont as *const AnyObject) };
-    let color_obj: &AnyObject = unsafe { &*(&*color as *const NSColor as *const AnyObject) };
-    let attrs = NSDictionary::<NSString, AnyObject>::from_slices::<NSString>(
-        &[unsafe { NSForegroundColorAttributeName }, unsafe { NSFontAttributeName }],
-        &[color_obj, font_obj],
-    );
-    unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(text), &attrs) }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub fn text_button(
@@ -60,6 +45,7 @@ pub fn text_button(
     button
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn text_button_underlined(
     parent: &objc2_app_kit::NSView,
     title: &str,
@@ -139,76 +125,84 @@ pub fn filled_button(
     button
 }
 
+/// What the clean button is entitled to say right now. Two of the three states
+/// have nothing to delete and no figure to quote, so they say neither.
+pub enum CleanCta {
+    /// Sizes are still arriving; nothing may be armed against numbers that are
+    /// still moving.
+    Measuring,
+    /// Nothing is ticked.
+    Empty,
+    Ready { count: usize, size: String },
+}
+
+impl CleanCta {
+    fn title(&self) -> String {
+        match self {
+            Self::Measuring => "Measuring\u{2026}".into(),
+            Self::Empty => "Tick what to clean".into(),
+            Self::Ready { count, .. } => format!("Clean {count} selected"),
+        }
+    }
+
+    fn size(&self) -> Option<&str> {
+        match self {
+            Self::Ready { size, .. } => Some(size),
+            _ => None,
+        }
+    }
+
+    fn armed(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+}
+
+const CTA_H: f64 = 34.0;
+const GLYPH: f64 = 13.0;
+const AFTER_GLYPH: f64 = 8.0;
+const BEFORE_SIZE: f64 = 10.0;
+
+/// Trash glyph, title and total, centred as one cluster. Fixed offsets only
+/// looked centred for one title length, and every state here has a different one.
 #[allow(clippy::too_many_arguments)]
 pub fn clean_button(
     parent: &objc2_app_kit::NSView,
-    title: &str,
-    size: &str,
+    cta: &CleanCta,
     x: f64,
     y: f64,
     w: f64,
     action: Sel,
     target: &AnyObject,
     tag: isize,
-    enabled: bool,
     theme: &Theme,
     mtm: MainThreadMarker,
 ) {
-    // With nothing ticked the button would delete nothing; say so by being
-    // unavailable rather than by inviting a click that does nothing.
-    let fill_alpha = if enabled { 1.0 } else { 0.28 };
-    add_fill(parent, x, y, w, 34.0, theme.ink, fill_alpha, 8.0, mtm);
-    crate::widgets::symbol_view(parent, "trash", x + 76.0, y + 10.0, 13.0, theme.surface, mtm);
-    crate::widgets::label(parent, title, x + 97.0, y + 8.0, 132.0, 18.0, 13.5, false, theme.surface, false, mtm);
-    let amount = crate::widgets::label(parent, size, x + 232.0, y + 9.0, 54.0, 16.0, 12.5, false, theme.surface, true, mtm);
-    amount.setAlphaValue(0.62);
+    let armed = cta.armed();
+    add_fill(parent, x, y, w, CTA_H, theme.ink, if armed { 1.0 } else { 0.28 }, 8.0, mtm);
+    let title = cta.title();
+    let title_w = fitted_width(&title, 13.5, false, mtm);
+    let size_w = cta.size().map_or(0.0, |size| fitted_width(size, 12.5, true, mtm));
+    let lead = if armed { GLYPH + AFTER_GLYPH } else { 0.0 };
+    let trail = cta.size().map_or(0.0, |_| BEFORE_SIZE + size_w);
+    let mut cursor = x + ((w - (lead + title_w + trail)) / 2.0).max(0.0);
+    if armed {
+        crate::widgets::symbol_view(parent, "trash", cursor, y + 10.0, GLYPH, theme.surface, mtm);
+        cursor += lead;
+    }
+    crate::widgets::label(parent, &title, cursor, y + 8.0, title_w + 2.0, 18.0, 13.5, false, theme.surface, false, mtm);
+    if let Some(size) = cta.size() {
+        cursor += title_w + BEFORE_SIZE;
+        let amount = crate::widgets::label(parent, size, cursor, y + 9.0, size_w + 2.0, 16.0, 12.5, false, theme.surface, true, mtm);
+        amount.setAlphaValue(0.62);
+    }
     let button = unsafe {
         NSButton::buttonWithTitle_target_action(&NSString::from_str(""), Some(target), Some(action), mtm)
     };
     button.setBordered(false);
-    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, 34.0)));
+    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, CTA_H)));
     button.setTag(tag);
-    button.setEnabled(enabled);
+    button.setEnabled(armed);
     parent.addSubview(&button);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn checkbox(
-    parent: &objc2_app_kit::NSView,
-    on: bool,
-    x: f64,
-    y: f64,
-    action: Sel,
-    target: &AnyObject,
-    tag: isize,
-    theme: &Theme,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    if on {
-        add_fill(parent, x, y, 15.0, 15.0, theme.ink, 1.0, 4.0, mtm);
-    } else {
-        let box_ = add_fill(parent, x, y, 15.0, 15.0, theme.surface_2, 0.78, 4.0, mtm);
-        box_.setBorderWidth(1.0);
-        box_.setBorderColor(&Theme::color(theme.line_2));
-    }
-    let title = if on { "\u{2713}" } else { "" };
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str(title),
-            Some(target),
-            Some(action),
-            mtm,
-        )
-    };
-    button.setButtonType(NSButtonType::MomentaryChange);
-    button.setBordered(false);
-    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(15.0, 15.0)));
-    button.setTag(tag);
-    if on {
-        button.setAttributedTitle(&attributed("\u{2713}", theme.surface, 10.0, true));
-    }
-    parent.addSubview(&button);
-    button
 }
 
 /// Pill-shaped toggle track + knob (mock: 38×22, radius 99).

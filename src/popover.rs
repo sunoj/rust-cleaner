@@ -30,7 +30,7 @@ pub fn attach(mtm: MainThreadMarker) {
     let handler = HANDLER.with(|cell| cell.borrow().clone());
     let button = with_state_ret(|state| state.status_item.button(mtm)).flatten();
     if let (Some(handler), Some(button)) = (handler, button) {
-        let target: &AnyObject = unsafe { &*(handler.as_ref() as *const _ as *const AnyObject) };
+        let target: &AnyObject = unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
         unsafe {
             button.setTarget(Some(target));
             button.setAction(Some(sel!(togglePopover:)));
@@ -82,7 +82,9 @@ pub fn content_view(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
 /// Rebuild popover content from current `AppState` (keeps it open if shown).
 pub fn refresh(mtm: MainThreadMarker) {
     ensure_popover(mtm);
-    crate::widgets::remember_scroll();
+    crate::scrolling::remember_scroll();
+    // The handles are about to point at views that have left the tree.
+    crate::live::clear();
     let was_shown = POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|p| p.isShown()));
     let (view, height) = with_state_ret(|state| {
         update_status_button(state, mtm);
@@ -167,6 +169,12 @@ fn show(mtm: MainThreadMarker) {
             NSRectEdge::MaxY,
         );
     }
+}
+
+/// Repaint only the menu bar item. Called while sizes arrive, where rebuilding
+/// the popover to move one number would defeat the point.
+pub fn refresh_status(mtm: MainThreadMarker) {
+    with_state_ret(|state| update_status_button(state, mtm));
 }
 
 fn status_theme(state: &AppState, mtm: MainThreadMarker) -> Theme {

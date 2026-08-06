@@ -85,6 +85,7 @@ fn stage_done_frame() {
             total_bytes: disk.map_or(0, |d| d.total_bytes),
             removed,
             skipped_count,
+            troubled_count: 0,
             skipped_bytes: state.targets.iter().map(|td| td.size_bytes).sum::<u64>().saturating_sub(freed),
         });
     });
@@ -109,6 +110,7 @@ fn stage_cleaning_frame() {
                 name: names[index].clone(),
                 size_bytes: td.size_bytes,
                 status: CleanItemStatus::Pending,
+                freed_bytes: 0,
             })
             .collect();
         if items.is_empty() {

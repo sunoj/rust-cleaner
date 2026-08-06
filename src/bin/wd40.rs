@@ -3,7 +3,9 @@
 use wd40::cleaner::{clean_all, clean_old};
 use wd40::config::Config;
 use wd40::disk::sum_bytes;
-use wd40::scanner::{human_size, scan_discover, scan_sizes, ArtifactGroup, TargetDir};
+use wd40::discover::scan_discover;
+use wd40::scanner::{human_size, ArtifactGroup, TargetDir};
+use wd40::sizes::scan_sizes;
 use std::time::Duration;
 
 const SECONDS_PER_DAY: u64 = 86_400;

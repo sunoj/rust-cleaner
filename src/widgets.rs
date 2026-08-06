@@ -1,47 +1,20 @@
 // Frame-based AppKit primitives for the 380pt popover (labels, fills, lines).
-// Exports: layout helpers; interactive controls live in `controls`.
+// Exports: layout helpers; controls live in `controls`, scrolling in `scrolling`.
 // Deps: objc2, objc2_app_kit, objc2_foundation, crate::theme::Theme.
 
 use crate::theme::Theme;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
-    NSBorderType, NSBox, NSBoxType, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
-    NSImage, NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView, NSKernAttributeName,
-    NSLineBreakMode, NSScrollView, NSTextAlignment, NSTextField, NSView,
+    NSBox, NSBoxType, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView, NSKernAttributeName,
+    NSLineBreakMode, NSTextAlignment, NSTextField, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSNumber, NSString};
 
 pub const POPOVER_WIDTH: f64 = 380.0;
 pub const PAD_X: f64 = 16.0;
 pub const CONTENT_WIDTH: f64 = POPOVER_WIDTH - PAD_X * 2.0;
-
-thread_local! {
-    /// The live scroll view, so its position can be read before a rebuild.
-    static SCROLL: std::cell::RefCell<Option<Retained<NSScrollView>>> =
-        const { std::cell::RefCell::new(None) };
-    /// How far the list is scrolled from the top, in points.
-    static SCROLL_TOP: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
-}
-
-/// Record where the list is scrolled to. Ticking a row rebuilds the whole view
-/// tree, and without this the list jumped back to the top every time — you had
-/// to find your place and scroll down again before ticking the next row.
-pub fn remember_scroll() {
-    SCROLL.with(|cell| {
-        let Some(scroll) = cell.borrow().clone() else { return };
-        let clip = scroll.contentView();
-        let doc_h = scroll.documentView().map_or(0.0, |d| d.frame().size.height);
-        let visible_h = clip.bounds().size.height;
-        SCROLL_TOP.set(((doc_h - visible_h) - clip.bounds().origin.y).max(0.0));
-    });
-}
-
-/// Send the next list back to the top — after a rescan the old offset would
-/// point into rows that no longer exist.
-pub fn reset_scroll() {
-    SCROLL_TOP.set(0.0);
-}
 
 /// The panel is an opaque surface, as the mock draws it. NSVisualEffectView was
 /// tried and dropped: behind-window vibrancy let the desktop through and made
@@ -55,43 +28,6 @@ pub fn root_view(height: f64, fill: (f64, f64, f64), mtm: MainThreadMarker) -> R
     );
     add_fill(&view, 0.0, 0.0, POPOVER_WIDTH, height, fill, 1.0, 0.0, mtm);
     view
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn scroll_document_view(
-    parent: &NSView,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    document_h: f64,
-    mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let scroll = NSScrollView::initWithFrame(
-        NSScrollView::alloc(mtm),
-        NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)),
-    );
-    scroll.setBorderType(NSBorderType::NoBorder);
-    scroll.setHasHorizontalScroller(false);
-    scroll.setHasVerticalScroller(true);
-    scroll.setAutohidesScrollers(true);
-    scroll.setDrawsBackground(false);
-    let document = NSView::initWithFrame(
-        NSView::alloc(mtm),
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, document_h.max(h))),
-    );
-    scroll.setDocumentView(Some(&document));
-    parent.addSubview(&scroll);
-    // AppKit's origin is bottom-left, so an untouched scroll view opens showing
-    // the end of the document. Park it where the list was last left instead —
-    // at the top on a fresh list, since SCROLL_TOP starts at zero.
-    let top_of_document = document_h.max(h) - h;
-    let origin_y = (top_of_document - SCROLL_TOP.get()).clamp(0.0, top_of_document);
-    let content = scroll.contentView();
-    content.setBoundsOrigin(NSPoint::new(0.0, origin_y));
-    scroll.reflectScrolledClipView(&content);
-    SCROLL.with(|cell| *cell.borrow_mut() = Some(scroll));
-    document
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,17 +180,7 @@ fn make_label(
     };
     field.setFont(Some(&font));
     if let Some(tracking) = tracking {
-        let font_obj: &objc2::runtime::AnyObject = unsafe { &*(&*font as *const NSFont as *const objc2::runtime::AnyObject) };
-        let color = Theme::color(color);
-        let color_obj: &objc2::runtime::AnyObject = unsafe { &*(&*color as *const _ as *const objc2::runtime::AnyObject) };
-        let kern = NSNumber::numberWithDouble(tracking);
-        let kern_obj: &objc2::runtime::AnyObject = unsafe { &*(&*kern as *const NSNumber as *const objc2::runtime::AnyObject) };
-        let attrs = NSDictionary::<NSString, objc2::runtime::AnyObject>::from_slices::<NSString>(
-            &[unsafe { NSForegroundColorAttributeName }, unsafe { NSFontAttributeName }, unsafe { NSKernAttributeName }],
-            &[color_obj, font_obj, kern_obj],
-        );
-        let value = unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(text), &attrs) };
-        field.setAttributedStringValue(&value);
+        field.setAttributedStringValue(&tracked_string(text, &font, color, tracking));
     }
     if wrap {
         field.setUsesSingleLineMode(false);
@@ -267,6 +193,33 @@ fn make_label(
     }
     parent.addSubview(&field);
     field
+}
+
+/// Letter-spaced text. AppKit only applies kerning through an attributed
+/// string, so a tracked label cannot go through `setStringValue`.
+fn tracked_string(
+    text: &str,
+    font: &NSFont,
+    color: (f64, f64, f64),
+    tracking: f64,
+) -> Retained<NSAttributedString> {
+    let font_obj: &objc2::runtime::AnyObject =
+        unsafe { &*(font as *const NSFont as *const objc2::runtime::AnyObject) };
+    let color = Theme::color(color);
+    let color_obj: &objc2::runtime::AnyObject =
+        unsafe { &*(&*color as *const _ as *const objc2::runtime::AnyObject) };
+    let kern = NSNumber::numberWithDouble(tracking);
+    let kern_obj: &objc2::runtime::AnyObject =
+        unsafe { &*(&*kern as *const NSNumber as *const objc2::runtime::AnyObject) };
+    let attrs = NSDictionary::<NSString, objc2::runtime::AnyObject>::from_slices::<NSString>(
+        &[
+            unsafe { NSForegroundColorAttributeName },
+            unsafe { NSFontAttributeName },
+            unsafe { NSKernAttributeName },
+        ],
+        &[color_obj, font_obj, kern_obj],
+    );
+    unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(text), &attrs) }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -306,19 +259,4 @@ pub fn fitted_width(text: &str, size: f64, mono: bool, mtm: MainThreadMarker) ->
     field.setFont(Some(&font));
     field.sizeToFit();
     field.frame().size.width
-}
-
-/// Soft accent wash behind a row (design: rgba(149,96,74,.09)) — size bar.
-pub fn add_size_wash(
-    parent: &NSView,
-    x: f64,
-    y: f64,
-    max_w: f64,
-    h: f64,
-    fraction: f64,
-    theme: &Theme,
-    mtm: MainThreadMarker,
-) {
-    let w = (max_w * fraction.clamp(0.03, 1.0)).max(4.0);
-    add_fill(parent, x, y, w, h, theme.accent, 0.09, 0.0, mtm);
 }

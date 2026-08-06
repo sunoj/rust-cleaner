@@ -27,7 +27,9 @@ const FOOTER_H: f64 = 74.0;
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
     stop_sheen();
     let summary = state.done.as_ref();
-    let rows = summary.map_or(0, |s| s.removed.len() + usize::from(s.skipped_count > 0));
+    let rows = summary.map_or(0, |s| {
+        s.removed.len() + usize::from(s.skipped_count > 0) + usize::from(s.troubled_count > 0)
+    });
     let height = match summary {
         Some(_) => HERO_H + rows as f64 * ROW_H + FOOTER_H,
         None => 64.0 + FOOTER_H,
@@ -43,6 +45,11 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
             }
             if s.skipped_count > 0 {
                 y = draw_row(&root, y, s.skipped_count, "Left in place \u{2014} not selected", &scan_size(s.skipped_bytes), true, theme, mtm);
+            }
+            // A target that would not come off, or only came off part way, is
+            // still on disk. Saying so is the whole point of the screen.
+            if s.troubled_count > 0 {
+                y = draw_row(&root, y, s.troubled_count, "Still there \u{2014} could not be removed", "", true, theme, mtm);
             }
             let _ = y;
         }

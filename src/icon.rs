@@ -51,7 +51,16 @@ pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
     straw.setLineJoinStyle(NSLineJoinStyle::Round);
     straw.stroke();
 
-    // The body.
+    draw_can(&map, scale);
+
+    image.unlockFocus();
+    image.setTemplate(true);
+    Some(image)
+}
+
+/// The can body and its two label bands, in the same stroke colour the caller
+/// has already set.
+fn draw_can(map: &impl Fn(f64, f64) -> NSPoint, scale: f64) {
     let top_left = map(200.0, 196.0);
     let body_rect = NSRect::new(
         NSPoint::new(top_left.x, top_left.y - 272.0 * scale),
@@ -62,7 +71,6 @@ pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
     body.setLineWidth(36.0 * scale);
     body.stroke();
 
-    // The two label bands.
     for y in [300.0, 380.0] {
         let band = NSBezierPath::new();
         band.moveToPoint(map(200.0, y));
@@ -71,10 +79,6 @@ pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
         band.setLineCapStyle(NSLineCapStyle::Round);
         band.stroke();
     }
-
-    image.unlockFocus();
-    image.setTemplate(true);
-    Some(image)
 }
 
 /// Tint for the size shown beside the glyph — this is where artifact weight
