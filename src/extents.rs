@@ -83,6 +83,9 @@ impl Attribution {
 
 /// Read the extent map of every file under `roots` and work out who holds what.
 pub fn attribute(roots: &[PathBuf]) -> Attribution {
+    // One `open` and a few `fcntl`s per file is a lot of syscalls; take them at
+    // a priority that yields the disk to whatever the user is running.
+    crate::qos::background();
     let mut refs: Vec<Ref> = Vec::new();
     let mut exclusive = vec![0_u64; roots.len()];
     for (owner, root) in roots.iter().enumerate() {

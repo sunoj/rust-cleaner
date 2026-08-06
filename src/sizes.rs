@@ -15,10 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-/// Directory reads in flight. Measured on an internal SSD: past this the reads
-/// queue behind one another instead of overlapping, and a thread per target
-/// (which is what this replaces) is far past it.
-const WORKERS: usize = 16;
 
 const BULK_ATTRS: RequestedAttributes = RequestedAttributes {
     name: true,
@@ -70,8 +66,12 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
         on_size(sized);
     };
     std::thread::scope(|scope| {
-        for _ in 0..WORKERS {
-            scope.spawn(|| walk.run(&paths, &publisher, &remember));
+        for _ in 0..crate::qos::workers() {
+            scope.spawn(|| {
+                // Housekeeping: never take the disk away from a build.
+                crate::qos::background();
+                walk.run(&paths, &publisher, &remember);
+            });
         }
     });
 }

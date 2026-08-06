@@ -6,6 +6,8 @@ pub mod discover;
 pub mod extents;
 pub mod disk;
 pub mod nesting;
+pub mod qos;
+pub mod reclaim;
 pub mod roots;
 pub mod scanner;
 pub mod size_cache;

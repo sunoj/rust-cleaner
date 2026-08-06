@@ -24,7 +24,12 @@ use wd40::discover::scan_discover;
 use wd40::scanner::TargetDir;
 use wd40::sizes::size_targets;
 
-const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
+/// How often the app rescans on its own, in seconds. Ten minutes rather than
+/// five: nothing on screen goes stale enough in that time to be worth waking
+/// the disk for, and the figures that cost the most to measure do not change
+/// at all between two of them.
+const AUTO_SCAN_INTERVAL: f64 = 10.0 * 60.0;
+
 /// A clean that takes a moment is worth watching, and one that takes none at
 /// all used to flash past before anything could be read. The floor is on the
 /// screen alone: removal starts the instant it is asked for, nothing waits on
