@@ -107,6 +107,15 @@ pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
         }
     }
 
+    // Cargo's downloads: the .crate tarballs, the sources unpacked from them and
+    // the registry index. All of it comes back on the next build, so it goes in
+    // whole rather than by part — but from CARGO_HOME, which can be moved.
+    if let Some(registry) = crate::toolchains::cargo_home().map(|home| home.join("registry")) {
+        if registry.is_dir() && !registry.is_symlink() {
+            push_dir(found, registry, ArtifactKind::Cache);
+        }
+    }
+
     for device in subdirs(&home.join("Library/Developer/CoreSimulator/Devices")) {
         let caches = device.join("data/Library/Caches");
         if caches.is_dir() && !caches.is_symlink() {

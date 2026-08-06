@@ -20,6 +20,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("Library/Caches/Yarn", "Yarn cache"),
     (".cache/yarn", "Yarn cache"),
     (".npm/_cacache", "npm cache"),
+    (".cargo/registry", "Cargo registry"),
 ];
 
 /// Every simulator's cache lives at
@@ -98,6 +99,10 @@ mod tests {
         );
         assert_eq!(cache_label(Path::new("/Users/x/.npm/_cacache")).as_deref(), Some("npm cache"));
         assert_eq!(cache_label(Path::new("/Users/x/.cache/pnpm")).as_deref(), Some("pnpm store"));
+        assert_eq!(
+            cache_label(Path::new("/Users/x/.cargo/registry")).as_deref(),
+            Some("Cargo registry")
+        );
         assert_eq!(cache_label(Path::new("/Users/x/Develop/thing")), None);
     }
 

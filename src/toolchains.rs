@@ -1,8 +1,9 @@
-// Rust toolchains under RUSTUP_HOME. Unlike every other artifact WD-40 handles,
-// a toolchain is global state rustup owns: it comes off with `rustup toolchain
-// uninstall`, never with an unlink, and anything still pointing at one keeps it
-// off the list entirely.
-// Exports: `removable`, `uninstall`, `label`.
+// The Rust installation's own layout: where rustup and cargo keep their homes,
+// which toolchains a scan may offer, and how one is removed. Unlike every other
+// artifact WD-40 handles, a toolchain is global state rustup owns: it comes off
+// with `rustup toolchain uninstall`, never with an unlink, and anything still
+// pointing at one keeps it off the list entirely.
+// Exports: `removable`, `uninstall`, `label`, `cargo_home`.
 // Deps: std, dirs, toml, walkdir.
 
 use std::collections::BTreeSet;
@@ -87,13 +88,19 @@ fn rustup_home() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Where cargo keeps its binaries and its downloads. Relocatable, and worth
+/// respecting: a registry collected from the wrong home is 1 GB of somebody
+/// else's disk that this Mac will not get back.
+pub fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
+}
+
 /// The rustup binary. A bundled app inherits a bare PATH from launchd, so the
 /// usual install locations are tried by hand rather than left to a lookup.
 fn rustup_bin() -> Option<PathBuf> {
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")));
-    cargo_home
+    cargo_home()
         .map(|home| home.join("bin/rustup"))
         .into_iter()
         .chain([PathBuf::from("/opt/homebrew/bin/rustup"), PathBuf::from("/usr/local/bin/rustup")])

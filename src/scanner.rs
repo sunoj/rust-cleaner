@@ -135,6 +135,7 @@ Scans for regenerable developer caches:
 \u{2022} DerivedData/ \u{2014} Xcode build cache
 \u{2022} ModuleCache.noindex/ \u{2014} Xcode module cache
 \u{2022} CoreSimulator/Devices/*/data/Library/Caches/ \u{2014} simulator caches
+\u{2022} ~/.cargo/registry \u{2014} crate downloads, sources and index
 \u{2022} ~/.npm/_cacache, pnpm and Yarn stores
 \u{2022} Homebrew cache dirs
 
