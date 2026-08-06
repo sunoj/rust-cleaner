@@ -3,11 +3,11 @@
 // Exports: `HoverRow`, `hover_row`.
 // Deps: objc2 AppKit tracking APIs; crate::{actions, widgets}.
 
-use crate::widgets::add_fill;
+use crate::widgets::{add_fill, retrack};
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{define_class, msg_send, AnyThread, ClassType, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{NSBox, NSControl, NSEvent, NSTrackingArea, NSTrackingAreaOptions, NSView};
+use objc2::{define_class, msg_send, ClassType, DefinedClass, MainThreadOnly};
+use objc2_app_kit::{NSBox, NSControl, NSEvent, NSTrackingAreaOptions, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use std::cell::Cell;
 
@@ -57,22 +57,9 @@ define_class!(
         #[unsafe(method(updateTrackingAreas))]
         fn update_tracking_areas(&self) {
             unsafe {
-                for area in self.trackingAreas() {
-                    self.removeTrackingArea(&area);
-                }
                 let _: () = msg_send![super(self), updateTrackingAreas];
-                let options = NSTrackingAreaOptions::MouseEnteredAndExited
-                    | NSTrackingAreaOptions::ActiveAlways
-                    | NSTrackingAreaOptions::InVisibleRect;
-                let area = NSTrackingArea::initWithRect_options_owner_userInfo(
-                    NSTrackingArea::alloc(),
-                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
-                    options,
-                    Some(self),
-                    None,
-                );
-                self.addTrackingArea(&area);
             }
+            retrack(self, NSTrackingAreaOptions::empty());
         }
     }
 );

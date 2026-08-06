@@ -54,7 +54,11 @@ pub fn rusty_icon(total_bytes: u64) -> Option<Retained<NSImage>> {
     draw_can(&map, scale);
 
     image.unlockFocus();
-    image.setTemplate(true);
+    // A template image has its colour thrown away and replaced by the menu
+    // bar's, so the rust tint above only survives with the flag off. Below the
+    // first rust step there is no tint to keep and template is what tracks the
+    // bar correctly.
+    image.setTemplate(!rusted);
     Some(image)
 }
 

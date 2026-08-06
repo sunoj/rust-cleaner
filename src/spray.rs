@@ -1,12 +1,12 @@
-// The WD-40 spray: the can that follows the pointer, the cone under it, the
-// mist it throws off, and the record of what it has wiped. Spraying lifts the
-// residue left where a target has really gone; live crust it cannot touch.
-// Exports: `Mist`, `draw_nozzle`, `wipe`, `clear_wiped`, `draw_film`.
+// What the spray does to the plate: the mist it throws off and the record of
+// what it has wiped. Spraying lifts the residue left where a target has really
+// gone; live crust it cannot touch. The can itself lives in `can`.
+// Exports: `Mist`, `wipe`, `clear_wiped`, `draw_film`.
 // Deps: crate::{metal, treemap}, objc2 AppKit.
 
 use crate::metal::{circle_path, grey, rnd};
 use crate::treemap::{contains, rust_tone, Tile, DONE};
-use objc2_app_kit::{NSBezierPath, NSColor};
+use objc2_app_kit::NSColor;
 use objc2_foundation::{NSPoint, NSRect};
 use std::cell::RefCell;
 
@@ -39,6 +39,11 @@ pub fn wipe(point: NSPoint, rect: NSRect, tiles: &[Tile]) {
         for (index, value) in mask.iter_mut().enumerate() {
             let centre = cell_centre(rect, index, cw, ch);
             let (dx, dy) = (centre.x - point.x, centre.y - point.y);
+            // The nozzle now runs for the whole job, so cells nowhere near it
+            // are dropped before the square root and the tile scan.
+            if dx.abs() >= REACH || dy.abs() >= REACH {
+                continue;
+            }
             let distance = (dx * dx + dy * dy).sqrt();
             if distance >= REACH || crusted(tiles, centre) {
                 continue;
@@ -155,65 +160,4 @@ impl Mist {
         }
         rnd(&mut self.seed)
     }
-}
-
-// ── the can ──────────────────────────────────────────────────────────────────
-
-/// Cone then can, both hung off the pointer exactly as the mock hangs them: the
-/// can sits up and to the right, which also keeps it clear of the arrow cursor.
-pub fn draw_nozzle(point: NSPoint, cone: bool) {
-    if cone {
-        for step in 0..12 {
-            grey(1.0, 0.1).setFill();
-            circle_path(point, 26.0 * (1.0 - step as f64 / 12.0)).fill();
-        }
-    }
-    let angle = -24.0_f64.to_radians();
-    let pivot = NSPoint::new(point.x + 6.0, point.y + 14.0);
-    ink(58.0, 55.0, 51.0).setFill();
-    quad(pivot, angle, 6.0, -9.0, 11.0, 0.0);
-    for strip in 0..8 {
-        let t = strip as f64 / 7.0;
-        let (r, g, b) = body_tone(t);
-        ink(r, g, b).setFill();
-        quad(pivot, angle, t * 24.0, 0.0, (t + 0.15) * 24.0, 44.0);
-    }
-    grey(0.94, 0.72).setFill();
-    quad(pivot, angle, 0.0, 8.0, 24.0, 13.0);
-    ink(91.0, 87.0, 81.0).setFill();
-    quad(pivot, angle, 5.0, 43.0, 19.0, 51.0);
-}
-
-/// The mock's 100° body gradient: #2A2825 → #4A4742 at 46% → #1F1D1B.
-fn body_tone(t: f64) -> (f64, f64, f64) {
-    const STOPS: [(f64, [f64; 3]); 3] = [
-        (0.0, [42.0, 40.0, 37.0]),
-        (0.46, [74.0, 71.0, 66.0]),
-        (1.0, [31.0, 29.0, 27.0]),
-    ];
-    let (lo, hi) = if t <= STOPS[1].0 { (STOPS[0], STOPS[1]) } else { (STOPS[1], STOPS[2]) };
-    let f = ((t - lo.0) / (hi.0 - lo.0)).clamp(0.0, 1.0);
-    let mix = |i: usize| lo.1[i] + (hi.1[i] - lo.1[i]) * f;
-    (mix(0), mix(1), mix(2))
-}
-
-/// The can's parts carry the mock's hex values, kept as 0-255 channels so they
-/// can be checked against the design without decoding a float.
-fn ink(r: f64, g: f64, b: f64) -> objc2::rc::Retained<NSColor> {
-    NSColor::colorWithSRGBRed_green_blue_alpha(r / 255.0, g / 255.0, b / 255.0, 1.0)
-}
-
-/// A rectangle in the can's own frame, rotated about the pivot and filled.
-fn quad(pivot: NSPoint, angle: f64, x0: f64, y0: f64, x1: f64, y1: f64) {
-    let (sin, cos) = angle.sin_cos();
-    let path = NSBezierPath::new();
-    for (index, (x, y)) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].iter().enumerate() {
-        let point = NSPoint::new(pivot.x + x * cos - y * sin, pivot.y + x * sin + y * cos);
-        match index {
-            0 => path.moveToPoint(point),
-            _ => path.lineToPoint(point),
-        }
-    }
-    path.closePath();
-    path.fill();
 }

@@ -4,11 +4,11 @@
 
 use crate::theme::Theme;
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSBox, NSBoxType, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
     NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView, NSKernAttributeName,
-    NSLineBreakMode, NSTextAlignment, NSTextField, NSView,
+    NSLineBreakMode, NSTextAlignment, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSNumber, NSString};
 
@@ -238,6 +238,29 @@ pub fn label_right(
     let field = label(parent, text, x, y, w, h, size, false, color, mono, mtm);
     field.setAlignment(NSTextAlignment::Right);
     field
+}
+
+/// Replace a view's tracking areas with one covering its whole visible rect.
+/// Every hovering view here wants the same base set — enter/exit, active
+/// whatever the app is doing, sized from the view — plus whatever `extra` it
+/// needs. Rebuilt on each `updateTrackingAreas`, or it stops firing on scroll.
+pub fn retrack(view: &NSView, extra: NSTrackingAreaOptions) {
+    unsafe {
+        for area in view.trackingAreas() {
+            view.removeTrackingArea(&area);
+        }
+        let area = NSTrackingArea::initWithRect_options_owner_userInfo(
+            NSTrackingArea::alloc(),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+            extra
+                | NSTrackingAreaOptions::MouseEnteredAndExited
+                | NSTrackingAreaOptions::ActiveAlways
+                | NSTrackingAreaOptions::InVisibleRect,
+            Some(view),
+            None,
+        );
+        view.addTrackingArea(&area);
+    }
 }
 
 /// Width this text needs at this size, measured with a throwaway field so a

@@ -72,6 +72,12 @@ impl CleanProgress {
         self.items.iter().filter(|item| item.status == CleanItemStatus::Active).count()
     }
 
+    /// True while any target is still queued or being removed. The cleaning
+    /// plate sprays itself for exactly this long.
+    pub fn working(&self) -> bool {
+        self.items.iter().any(|item| !item.status.settled())
+    }
+
     /// Items that were touched but did not come off cleanly.
     pub fn troubled_count(&self) -> usize {
         self.items

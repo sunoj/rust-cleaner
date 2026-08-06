@@ -1,29 +1,22 @@
-// The cleaning screen's plate: brushed steel, a rust crust covering the share
-// of the volume these targets occupy, and a WD-40 nozzle on the pointer. A tile
-// only clears when its target is really gone; the spray lifts the residue left
-// behind. Exports: `plate_view`. Deps: crate::{header, metal, spray, treemap}.
+// The cleaning screen's plate: brushed steel under a rust crust, and a WD-40
+// nozzle that works it — by itself while the job runs, from the pointer for as
+// long as the pointer is on the plate. A tile clears only when its target is
+// really gone. Exports: `plate_view`. Deps: crate::{can, crust, drift, spray}.
 
-use crate::header::scan_size;
-use crate::metal::{brushed, grey, inset, outline, reduce_motion, rings};
-use crate::spray::{draw_film, draw_nozzle, wipe, Mist};
+use crate::can::draw_nozzle;
+use crate::crust::{idle_text, legend_text, paint_plate, plate_edge};
+use crate::drift::{start_clock, stop_clock, ticking, Drift};
+use crate::metal::{grey, inset, outline, reduce_motion};
+use crate::spray::{wipe, Mist};
 use crate::state::CleanProgress;
-use crate::crust::{draw_tile, phase};
-use crate::treemap::{contains, tiles, Tile};
+use crate::treemap::{contains, tiles, Tile, DONE};
+use crate::widgets::retrack;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{
-    NSBezierPath, NSColor, NSEvent, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
-};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
+use objc2_app_kit::{NSEvent, NSTextField, NSTrackingAreaOptions, NSView};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSString};
 use std::cell::{Cell, RefCell};
-
-/// 50 Hz while the mist is alive, and not a tick longer.
-const MIST_TICK: f64 = 1.0 / 50.0;
-
-thread_local! {
-    static MIST: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
-}
 
 pub struct PlateIvars {
     /// Replaced in place as the run advances. Rebuilding the whole view for
@@ -36,12 +29,16 @@ pub struct PlateIvars {
     share: String,
     idle: RefCell<String>,
     dark: bool,
-    /// Reduce Motion: the wipe still lands, the mist never travels.
+    /// Reduce Motion: the wipe still lands, nothing ever moves on its own.
     still: bool,
     pointer: Cell<NSPoint>,
     inside: Cell<bool>,
-    spraying: Cell<bool>,
+    held: Cell<bool>,
     mist: RefCell<Mist>,
+    /// True while the job still has targets to work through. The spray runs
+    /// itself for exactly that long, and this is read from the job's state.
+    working: Cell<bool>,
+    drift: RefCell<Drift>,
 }
 
 define_class!(
@@ -55,6 +52,9 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             self.paint();
+            // The plate is on screen and drawing, which is the one moment it is
+            // certain the clock may run; from here on the clock draws itself.
+            self.wake();
         }
 
         #[unsafe(method(mouseEntered:))]
@@ -70,9 +70,8 @@ define_class!(
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             self.track(event);
-            self.ivars().spraying.set(true);
+            self.ivars().held.set(true);
             self.burst(self.ivars().pointer.get());
-            start_mist(self);
         }
 
         #[unsafe(method(mouseDragged:))]
@@ -83,7 +82,7 @@ define_class!(
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, _event: &NSEvent) {
-            self.ivars().spraying.set(false);
+            self.ivars().held.set(false);
             self.setNeedsDisplay(true);
         }
 
@@ -91,30 +90,46 @@ define_class!(
         fn mouse_exited(&self, _event: &NSEvent) {
             let ivars = self.ivars();
             ivars.inside.set(false);
-            ivars.spraying.set(false);
+            ivars.held.set(false);
             ivars.hover.set(-1);
+            // Hand back where the pointer left it, not where the job is.
+            ivars.drift.borrow_mut().resume_from(ivars.pointer.get());
             self.refresh_legend();
             self.setNeedsDisplay(true);
         }
 
-        #[unsafe(method(mistTick:))]
-        fn mist_tick(&self, _timer: *mut AnyObject) {
+        #[unsafe(method(sprayTick:))]
+        fn spray_tick(&self, _timer: *mut AnyObject) {
             let ivars = self.ivars();
-            // A popover closed mid-spray takes its window with it, and a view
-            // with no window must never keep a 50 Hz timer alive.
-            if self.window().is_none() {
-                ivars.spraying.set(false);
-                return stop_mist();
+            if !self.on_screen() {
+                ivars.held.set(false);
+                return stop_clock();
             }
-            if ivars.spraying.get() {
-                let point = ivars.mist.borrow_mut().wobble(ivars.pointer.get(), 5.0);
+            if ivars.working.get() {
+                let home = self.home();
+                let tiles = ivars.tiles.borrow();
+                ivars.drift.borrow_mut().step(&tiles, home);
+            }
+            if self.spray_on() {
+                let point = ivars.mist.borrow_mut().wobble(self.nozzle(), 5.0);
                 self.burst(point);
             }
             let alive = ivars.mist.borrow_mut().step();
-            if !alive && !ivars.spraying.get() {
-                stop_mist();
+            if !alive && !self.spray_on() {
+                stop_clock();
             }
             self.setNeedsDisplay(true);
+        }
+
+        /// A closed popover takes its window with it, and a view with no window
+        /// on screen must never keep a 50 Hz timer alive.
+        #[unsafe(method(viewDidMoveToWindow))]
+        fn view_did_move_to_window(&self) {
+            if !self.on_screen() {
+                self.ivars().inside.set(false);
+                self.ivars().held.set(false);
+                stop_clock();
+            }
         }
 
         #[unsafe(method(acceptsFirstMouse:))]
@@ -125,22 +140,9 @@ define_class!(
         #[unsafe(method(updateTrackingAreas))]
         fn update_tracking_areas(&self) {
             unsafe {
-                for area in self.trackingAreas() {
-                    self.removeTrackingArea(&area);
-                }
                 let _: () = msg_send![super(self), updateTrackingAreas];
-                let area = NSTrackingArea::initWithRect_options_owner_userInfo(
-                    NSTrackingArea::alloc(),
-                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
-                    NSTrackingAreaOptions::MouseEnteredAndExited
-                        | NSTrackingAreaOptions::MouseMoved
-                        | NSTrackingAreaOptions::ActiveAlways
-                        | NSTrackingAreaOptions::InVisibleRect,
-                    Some(self),
-                    None,
-                );
-                self.addTrackingArea(&area);
             }
+            retrack(self, NSTrackingAreaOptions::MouseMoved);
         }
     }
 );
@@ -149,42 +151,34 @@ impl PlateView {
     fn paint(&self) {
         let bounds = self.bounds();
         let ivars = self.ivars();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 10.0, 10.0).addClip();
-        brushed(bounds, ivars.dark);
-        rings(NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0), bounds.size.height * 0.44, ivars.dark);
         let tiles = ivars.tiles.borrow();
-        draw_film(bounds, &tiles);
-        for (index, tile) in tiles.iter().enumerate() {
-            draw_tile(index, tile);
+        paint_plate(bounds, ivars.dark, &tiles);
+        if let Some(tile) = usize::try_from(ivars.hover.get()).ok().and_then(|at| tiles.get(at)) {
+            grey(1.0, 0.8).setStroke();
+            outline(inset(tile.rect, 1.0), 1.5);
         }
         drop(tiles);
-        self.hovered(|tile| {
-            if let Some(tile) = tile {
-                grey(1.0, 0.8).setStroke();
-                outline(inset(tile.rect, 1.0), 1.5);
-            }
-        });
         ivars.mist.borrow().draw();
-        if ivars.inside.get() {
-            draw_nozzle(ivars.pointer.get(), ivars.spraying.get());
+        if ivars.inside.get() || self.moving() {
+            draw_nozzle(self.nozzle(), self.spray_on());
         }
-        NSColor::colorWithSRGBRed_green_blue_alpha(0.11, 0.1, 0.09, 0.16).setStroke();
-        let edge = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset(bounds, 0.5), 9.5, 9.5);
-        edge.setLineWidth(1.0);
-        edge.stroke();
-    }
-
-    /// Hand the hovered tile to `body`; the tiles live behind a borrow now.
-    fn hovered<R>(&self, body: impl FnOnce(Option<&Tile>) -> R) -> R {
-        let tiles = self.ivars().tiles.borrow();
-        let index = usize::try_from(self.ivars().hover.get()).ok();
-        body(index.and_then(|index| tiles.get(index)))
+        plate_edge(bounds);
     }
 
     /// Take the run's new state without rebuilding the view.
     pub fn update(&self, progress: &CleanProgress, crust: NSRect) {
         let ivars = self.ivars();
-        *ivars.tiles.borrow_mut() = tiles(progress, crust);
+        let before: Vec<u8> = ivars.tiles.borrow().iter().map(|tile| tile.state).collect();
+        let fresh = tiles(progress, crust);
+        // Ground a target has just really left is what the nozzle works next.
+        // The aim is read off the job; nothing here moves the job along.
+        for (index, tile) in fresh.iter().enumerate() {
+            if tile.state == DONE && before.get(index).is_some_and(|state| *state != DONE) {
+                ivars.drift.borrow_mut().cleared(index);
+            }
+        }
+        *ivars.tiles.borrow_mut() = fresh;
+        ivars.working.set(progress.working());
         *ivars.idle.borrow_mut() = idle_text(&ivars.share, progress);
         let hover = ivars.hover.get();
         if usize::try_from(hover).is_ok_and(|index| index >= ivars.tiles.borrow().len()) {
@@ -192,6 +186,49 @@ impl PlateView {
         }
         self.refresh_legend();
         self.setNeedsDisplay(true);
+    }
+
+    /// True while the plate is performing: with Reduce Motion on it never is.
+    fn moving(&self) -> bool {
+        self.ivars().working.get() && !self.ivars().still
+    }
+
+    /// True while spray is coming out: the whole time the job is working, and
+    /// under the hand while the button is down.
+    fn spray_on(&self) -> bool {
+        self.moving() || self.ivars().held.get()
+    }
+
+    /// Where the can is: the pointer takes it over for as long as it is on the
+    /// plate, and the automatic path has it back the moment the pointer leaves.
+    fn nozzle(&self) -> NSPoint {
+        let ivars = self.ivars();
+        match ivars.inside.get() {
+            true => ivars.pointer.get(),
+            false => ivars.drift.borrow().point(),
+        }
+    }
+
+    /// Where the nozzle waits when the job has nothing left to point it at.
+    fn home(&self) -> NSPoint {
+        let size = self.bounds().size;
+        NSPoint::new(size.width / 2.0, size.height / 2.0)
+    }
+
+    fn on_screen(&self) -> bool {
+        self.window().is_some_and(|window| window.isVisible())
+    }
+
+    /// Run the clock while something still has to move. Called only from a
+    /// draw, so the plate is on screen by then; a view with no window at all is
+    /// a closed or rebuilt screen. Reduce Motion never starts it — a rub still
+    /// wipes, straight off the mouse events.
+    fn wake(&self) {
+        if self.ivars().still || ticking() || !self.spray_on() || self.window().is_none() {
+            return;
+        }
+        let target: &AnyObject = unsafe { &*(self as *const Self as *const AnyObject) };
+        start_clock(target, sel!(sprayTick:));
     }
 
     /// One puff: wipe what the nozzle covers, then throw off mist.
@@ -223,16 +260,10 @@ impl PlateView {
     }
 
     fn refresh_legend(&self) {
-        let text = self.hovered(|tile| match tile {
-            Some(tile) => format!("{} \u{00b7} {} \u{00b7} {}", tile.name, scan_size(tile.size), phase(tile.state)),
-            None => self.ivars().idle.borrow().clone(),
-        });
-        self.ivars().legend.setStringValue(&NSString::from_str(&text));
+        let ivars = self.ivars();
+        let text = legend_text(&ivars.tiles.borrow(), ivars.hover.get(), &ivars.idle.borrow());
+        ivars.legend.setStringValue(&NSString::from_str(&text));
     }
-}
-
-fn idle_text(share: &str, progress: &CleanProgress) -> String {
-    format!("{share} \u{00b7} {}/{} clear", progress.done_count, progress.total_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -245,7 +276,8 @@ pub fn plate_view(
     dark: bool,
     mtm: MainThreadMarker,
 ) -> Retained<PlateView> {
-    stop_mist();
+    stop_clock();
+    let home = NSPoint::new(frame.size.width / 2.0, frame.size.height / 2.0);
     let view = mtm.alloc::<PlateView>().set_ivars(PlateIvars {
         tiles: RefCell::new(tiles(progress, crust)),
         hover: Cell::new(-1),
@@ -256,32 +288,12 @@ pub fn plate_view(
         still: reduce_motion(),
         pointer: Cell::new(NSPoint::new(-100.0, -100.0)),
         inside: Cell::new(false),
-        spraying: Cell::new(false),
+        held: Cell::new(false),
         mist: RefCell::new(Mist::default()),
+        working: Cell::new(progress.working()),
+        drift: RefCell::new(Drift::new(home)),
     });
     let view: Retained<PlateView> = unsafe { msg_send![super(view), initWithFrame: frame] };
     view.refresh_legend();
     view
-}
-
-fn start_mist(view: &PlateView) {
-    if view.ivars().still {
-        return;
-    }
-    stop_mist();
-    let target: &AnyObject = unsafe { &*(view as *const PlateView as *const AnyObject) };
-    let timer = unsafe {
-        NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-            MIST_TICK, target, sel!(mistTick:), None, true,
-        )
-    };
-    MIST.with(|cell| *cell.borrow_mut() = Some(timer));
-}
-
-fn stop_mist() {
-    MIST.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.invalidate();
-        }
-    });
 }

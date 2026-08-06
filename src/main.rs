@@ -4,12 +4,14 @@
 
 mod actions;
 mod autostart;
+mod can;
 mod checkbox;
 mod clean_view;
 mod controls;
 mod crust;
 mod disk_gauge;
 mod done_view;
+mod drift;
 mod header;
 mod hover_row;
 mod icon;
