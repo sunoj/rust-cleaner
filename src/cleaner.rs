@@ -4,7 +4,7 @@
 // Exports: `Removal`, `remove_target`, `remove_targets`, `clean_all`, `clean_old`.
 // Deps: std, crate::{scanner, sizes}.
 
-use crate::scanner::TargetDir;
+use crate::scanner::{ArtifactKind, TargetDir};
 use crate::sizes::measure_dir;
 use std::fs;
 use std::path::PathBuf;
@@ -45,11 +45,24 @@ impl Removal {
 
 /// Remove one target. Safety: the path is re-checked, because a scan result is
 /// a claim about the past and a symlink could have taken its place since.
+///
+/// A toolchain is the one artifact that is not ours to unlink: rustup keeps its
+/// own record of what is installed, and an `rm` would leave that record lying.
 pub fn remove_target(target: &TargetDir) -> Removal {
     if target.path.is_symlink() || !target.path.is_dir() {
         return Removal::Refused("path changed since scan (symlink or missing)".into());
     }
-    let Err(err) = fs::remove_dir_all(&target.path) else {
+    match target.kind {
+        ArtifactKind::Toolchain => settle(target, crate::toolchains::uninstall(&target.path).err()),
+        _ => settle(target, fs::remove_dir_all(&target.path).err().map(|err| err.to_string())),
+    }
+}
+
+/// What a removal actually came to, measured rather than assumed: one that got
+/// part way is credited with the bytes it really returned, and one that got
+/// nowhere is never counted as done.
+fn settle(target: &TargetDir, problem: Option<String>) -> Removal {
+    let Some(reason) = problem else {
         return Removal::Gone;
     };
     if !target.path.exists() {
@@ -57,12 +70,12 @@ pub fn remove_target(target: &TargetDir) -> Removal {
     }
     let left_bytes = measure_dir(&target.path);
     if left_bytes >= target.size_bytes {
-        return Removal::Refused(err.to_string());
+        return Removal::Refused(reason);
     }
     Removal::Partial {
         freed_bytes: target.size_bytes.saturating_sub(left_bytes),
         left_bytes,
-        reason: err.to_string(),
+        reason,
     }
 }
 

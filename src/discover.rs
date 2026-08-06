@@ -64,6 +64,9 @@ pub fn scan_discover(config: &Config) -> Vec<TargetDir> {
     if config.scans(ArtifactGroup::Caches) {
         roots::collect_dev_caches(&mut found);
     }
+    if config.scans(ArtifactGroup::Toolchains) {
+        roots::collect_toolchains(&mut found, &config.scan_dirs, config.max_depth);
+    }
     found
 }
 
