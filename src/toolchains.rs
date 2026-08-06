@@ -37,6 +37,12 @@ pub fn removable(scan_dirs: &[PathBuf], max_depth: usize) -> Vec<PathBuf> {
 /// installed stays true. Deleting the directory would leave it claiming the
 /// toolchain is still there.
 pub fn uninstall(path: &Path) -> Result<(), String> {
+    uninstall_in(&rustup_home(), path)
+}
+
+/// The home is passed on rather than left to the child to work out, so the
+/// toolchain being removed is always the one from the home it was listed from.
+fn uninstall_in(home: &Path, path: &Path) -> Result<(), String> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err("toolchain directory has no name".into());
     };
@@ -45,6 +51,7 @@ pub fn uninstall(path: &Path) -> Result<(), String> {
     };
     let output = Command::new(&rustup)
         .args(["toolchain", "uninstall", name])
+        .env("RUSTUP_HOME", home)
         .output()
         .map_err(|err| format!("could not run {}: {err}", rustup.display()))?;
     if !output.status.success() {
@@ -197,9 +204,9 @@ fn first_line(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{channel_of, is_pinned, label};
+    use super::{channel_of, is_pinned, label, rustup_bin, uninstall_in};
     use std::collections::BTreeSet;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn pins(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -259,6 +266,32 @@ mod tests {
     #[test]
     fn a_path_toolchain_pins_no_channel() {
         assert_eq!(channel_of("[toolchain]\npath = \"/home/me/rust/build/host/stage1\"\n"), None);
+    }
+
+    /// The removal really goes through rustup, against a RUSTUP_HOME of our
+    /// own so no toolchain anyone is using is ever at risk. Without this the
+    /// only proof the command line is right is that it reads right.
+    #[test]
+    fn a_toolchain_is_removed_through_rustup_in_the_home_it_came_from() {
+        let Some(_) = rustup_bin() else {
+            eprintln!("skipped: rustup is not installed");
+            return;
+        };
+        let home: PathBuf = std::env::temp_dir()
+            .join(format!("wd40-rustup-{}", std::process::id()));
+        let toolchain = home.join("toolchains/1.0.0-fake-apple-darwin");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(toolchain.join("bin")).expect("fake toolchain");
+        std::fs::write(toolchain.join("bin/blob"), vec![b'x'; 2048]).expect("fake payload");
+        std::fs::write(
+            home.join("settings.toml"),
+            "default_toolchain = \"stable-aarch64-apple-darwin\"\nversion = \"12\"\n",
+        )
+        .expect("fake settings");
+
+        assert_eq!(uninstall_in(&home, &toolchain), Ok(()));
+        assert!(!toolchain.exists(), "the toolchain directory is gone");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
