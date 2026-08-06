@@ -9,7 +9,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
-    NSButton, NSButtonType, NSColor, NSEventModifierFlags, NSFont, NSFontAttributeName,
+    NSButton, NSColor, NSEventModifierFlags, NSFont, NSFontAttributeName,
     NSForegroundColorAttributeName, NSSlider, NSUnderlineStyleAttributeName,
 };
 use objc2_foundation::{
@@ -205,31 +205,14 @@ pub fn clean_button(
     parent.addSubview(&button);
 }
 
-/// Pill-shaped toggle track + knob (mock: 38×22, radius 99).
-#[allow(clippy::too_many_arguments)]
-pub fn pill_switch(
-    parent: &objc2_app_kit::NSView,
-    on: bool,
-    x: f64,
-    y: f64,
-    action: Sel,
-    tag: isize,
-    theme: &Theme,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) {
+/// Pill-shaped toggle track + knob (mock: 38×22, radius 99). Paint only: the
+/// row it sits in is the click target, so a second button under the pill would
+/// only be a smaller way to hit the same thing.
+pub fn pill(parent: &objc2_app_kit::NSView, on: bool, x: f64, y: f64, theme: &Theme, mtm: MainThreadMarker) {
     let track = if on { theme.ink } else { theme.surface_3 };
     add_fill(parent, x, y, 38.0, 22.0, track, 1.0, 11.0, mtm);
     let knob_x = if on { x + 18.0 } else { x + 2.0 };
     add_fill(parent, knob_x, y + 2.0, 18.0, 18.0, theme.surface, 1.0, 9.0, mtm);
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(&NSString::from_str(""), Some(target), Some(action), mtm)
-    };
-    button.setBordered(false);
-    button.setButtonType(NSButtonType::MomentaryChange);
-    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(38.0, 22.0)));
-    button.setTag(tag);
-    parent.addSubview(&button);
 }
 
 /// Keep-days NSSlider (0–30) matching the mock safety control.

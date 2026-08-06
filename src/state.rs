@@ -2,7 +2,7 @@
 // Exports: `AppState`, `UiScreen`, clean/done summaries, selection accessors.
 // Deps: objc2_app_kit, crate::{selection, updater}, wd40 lib.
 
-use crate::selection::{default_selection, selected_bytes};
+use crate::selection::{default_selection, empty_measured, selected_bytes, settled_order};
 use crate::updater::Updater;
 use objc2::rc::Retained;
 use objc2_app_kit::NSStatusItem;
@@ -148,6 +148,13 @@ impl AppState {
         )
     }
 
+    /// Targets the list must not draw: measured, and holding nothing. Until a
+    /// target's own figure lands it stays in, so nothing pops into the list one
+    /// row at a time while the pass runs.
+    pub fn empty_targets(&self) -> HashSet<usize> {
+        empty_measured(&self.targets, &self.measured)
+    }
+
     /// True when every target in this group has a settled size.
     pub fn group_settled(&self, group: ArtifactGroup) -> bool {
         self.targets
@@ -169,9 +176,14 @@ impl AppState {
 
     /// Sort largest first now that every figure is in, carrying the ticks with
     /// their targets — a selection is a promise about paths, not positions.
+    ///
+    /// The targets that measured empty are dropped here, and for good: they
+    /// were rows that could free nothing. Their bytes were zero, so no total on
+    /// screen moves; the group counts drop to what the list actually shows. A
+    /// tick on one of them goes with it, which is the only way the button can
+    /// keep counting exactly the rows the user can see.
     pub fn finish_sizing(&mut self) {
-        let mut order: Vec<usize> = (0..self.targets.len()).collect();
-        order.sort_by_key(|index| std::cmp::Reverse(self.targets[*index].size_bytes));
+        let order = settled_order(&self.targets, &self.measured);
         let selected: HashSet<usize> = order
             .iter()
             .enumerate()

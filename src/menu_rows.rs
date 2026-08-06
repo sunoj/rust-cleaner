@@ -3,6 +3,7 @@
 // Deps: crate::names, wd40::{disk, scanner}.
 
 use crate::names::display_names;
+use std::collections::HashSet;
 use wd40::disk::sum_bytes;
 use wd40::scanner::{ArtifactGroup, TargetDir};
 
@@ -24,12 +25,22 @@ pub struct GroupPlan<'a> {
     pub group: ArtifactGroup,
     pub rows: Vec<RowPlan<'a>>,
     pub count: usize,
+    /// Rows this group has but the budget could not fit.
     pub hidden: usize,
     pub size: u64,
 }
 
 /// Split `targets` into groups and decide which rows fit within `limit`.
-pub fn plan_groups(targets: &[TargetDir], limit: usize) -> Vec<GroupPlan<'_>> {
+///
+/// `empty` is left out of the rows and out of the count with it: a target that
+/// was measured and holds nothing frees nothing, so counting it would promise
+/// a row the list does not have. The totals are untouched — an empty target
+/// contributes no bytes to add or lose.
+pub fn plan_groups<'a>(
+    targets: &'a [TargetDir],
+    empty: &HashSet<usize>,
+    limit: usize,
+) -> Vec<GroupPlan<'a>> {
     let names = display_names(targets);
     let members: Vec<(ArtifactGroup, Vec<(usize, &TargetDir)>)> = ArtifactGroup::ALL
         .iter()
@@ -37,7 +48,7 @@ pub fn plan_groups(targets: &[TargetDir], limit: usize) -> Vec<GroupPlan<'_>> {
             let found: Vec<(usize, &TargetDir)> = targets
                 .iter()
                 .enumerate()
-                .filter(|(_, td)| td.kind.group() == group)
+                .filter(|(index, td)| td.kind.group() == group && !empty.contains(index))
                 .collect();
             (group, found)
         })
@@ -92,6 +103,7 @@ fn allocate(sizes: &[usize], limit: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::{allocate, plan_groups};
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::SystemTime;
     use wd40::scanner::{ArtifactKind, TargetDir};
@@ -112,7 +124,7 @@ mod tests {
             target("/w/b/target", ArtifactKind::RustTarget, 8),
             target("/w/c/node_modules", ArtifactKind::NodeModules, 7),
         ];
-        let plans = plan_groups(&targets, 2);
+        let plans = plan_groups(&targets, &HashSet::new(), 2);
         assert_eq!(plans[0].rows.len(), 2);
         assert_eq!(plans[0].hidden, 0);
         assert_eq!(plans[1].rows.len(), 0);
@@ -136,15 +148,32 @@ mod tests {
         }
     }
 
+    /// A row that frees nothing is not a row, and the count says so — the
+    /// figure beside the group title is what the list can show, not what the
+    /// scan happened to walk past.
+    #[test]
+    fn an_empty_target_leaves_the_rows_and_the_count() {
+        let targets = vec![
+            target("/w/a/target", ArtifactKind::RustTarget, 9),
+            target("/w/b/target", ArtifactKind::RustTarget, 0),
+        ];
+        let plans = plan_groups(&targets, &HashSet::from([1]), 10);
+        assert_eq!(plans[0].rows.len(), 1);
+        assert_eq!(plans[0].rows[0].index, 0);
+        assert_eq!(plans[0].count, 1);
+        assert_eq!(plans[0].hidden, 0);
+        assert_eq!(plans[0].size, 9);
+    }
+
     #[test]
     fn a_group_of_one_kind_leaves_the_kind_suffix_off() {
         let targets = vec![
             target("/w/a/target", ArtifactKind::RustTarget, 9),
             target("/tmp/cc-target-b", ArtifactKind::TmpTarget, 8),
         ];
-        let mixed = plan_groups(&targets, 10);
+        let mixed = plan_groups(&targets, &HashSet::new(), 10);
         assert_eq!(mixed[0].rows[0].kind, "target");
-        let single = plan_groups(&targets[..1], 10);
+        let single = plan_groups(&targets[..1], &HashSet::new(), 10);
         assert_eq!(single[0].rows[0].kind, "");
     }
 }

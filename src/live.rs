@@ -157,9 +157,11 @@ pub fn selection_changed(mtm: MainThreadMarker) -> bool {
                 let on = state.selected.contains(&row.index);
                 row.check.set(crate::selection::GroupSelection::from(on), &scan.theme);
             }
+            let empty = state.empty_targets();
             for group in &scan.groups {
-                let selection =
-                    crate::selection::group_selection(&state.targets, &state.selected, group.group);
+                let selection = crate::selection::group_selection(
+                    &state.targets, &state.selected, group.group, &empty,
+                );
                 group.check.set(selection, &scan.theme);
             }
             scan.footer.clear();

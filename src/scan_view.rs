@@ -28,6 +28,8 @@ pub const TAG_SETTINGS: isize = 2002;
 pub const TAG_SHOW_MORE: isize = 2006;
 pub const TAG_ITEM_BASE: isize = 1000;
 pub const TAG_GROUP_BASE: isize = 3000;
+/// Well clear of the item tags, which run from `TAG_ITEM_BASE` one per row.
+pub const TAG_REVEAL_BASE: isize = 10_000;
 
 /// Match the mock: show the largest few, offer a link for the rest.
 const VISIBLE_CAP: usize = 6;
@@ -42,7 +44,8 @@ fn footer_h(state: &AppState) -> f64 {
 const MAX_HEIGHT: f64 = 540.0;
 
 pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
-    let plans = plan_groups(&state.targets, if state.show_all { usize::MAX } else { VISIBLE_CAP });
+    let empty = state.empty_targets();
+    let plans = plan_groups(&state.targets, &empty, if state.show_all { usize::MAX } else { VISIBLE_CAP });
     let list_h = measure_list(&plans);
     let body_h = (MAX_HEIGHT - header::SCAN_HEADER_HEIGHT - footer_h(state)).min(list_h);
     let height = header::SCAN_HEADER_HEIGHT + body_h + footer_h(state);
@@ -83,6 +86,7 @@ fn draw_list(
 ) -> (Vec<Row>, Vec<Group>) {
     let list_bottom = 4.0;
     let names = display_names(&state.targets);
+    let empty = state.empty_targets();
     let max_size = state.measured.iter().filter_map(|i| state.targets.get(*i)).map(|t| t.size_bytes).max().unwrap_or(1).max(1);
     let (mut rows, mut groups) = (Vec::new(), Vec::new());
     for plan in plans {
@@ -94,7 +98,7 @@ fn draw_list(
             count: plan.count,
             size: plan.size,
             settled: state.group_settled(plan.group),
-            selection: group_selection(&state.targets, &state.selected, plan.group),
+            selection: group_selection(&state.targets, &state.selected, plan.group, &empty),
         };
         let (next, group) = scan_rows::draw_group_header(root, y, &model, theme, target, mtm);
         y = next;

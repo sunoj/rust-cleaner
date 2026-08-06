@@ -1,220 +1,233 @@
-// Settings screen inside the 380pt popover (replaces the old NSWindow).
-// Exports: `build`. Maps real config fields; skips unknowable design toggles.
-// Deps: crate::{autostart, state, theme, updater, widgets}, wd40::config.
+// Settings screen inside the 380pt popover: what is scanned, what is kept, and
+// where the app looks. Every control here changes something the scan does.
+// Exports: `build`, `next_interval`, `next_depth`, `TAG_GROUP_BASE`, `TAG_ROOT_BASE`.
+// Deps: crate::{controls, header, scrolling, settings_row, state, theme, widgets}.
 
+use crate::controls::{days_slider, set_cmd_key, text_button};
+use crate::header::scan_size;
+use crate::settings_row::{divider, group_row, section, switch_row, value_row, GroupSpec, Spec};
 use crate::state::AppState;
 use crate::theme::Theme;
-use crate::controls::{days_slider, pill_switch, text_button};
 use crate::widgets::{
-    self, add_fill, add_line, label, label_right, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
+    self, add_fill, add_line, fitted_width, label, label_right, CONTENT_WIDTH, PAD_X, POPOVER_WIDTH,
 };
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
+use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2_app_kit::NSView;
-use objc2_foundation::MainThreadMarker;
-use wd40::config::ARTIFACT_DIRS;
+use objc2_foundation::{MainThreadMarker, NSPoint};
+use wd40::scanner::ArtifactGroup;
 
-pub const TAG_QUIT: isize = 2005;
-pub const TAG_LOGIN: isize = 2100;
-pub const TAG_AUTO_UPDATE: isize = 2101;
-pub const TAG_INTERVAL: isize = 2102;
-pub const TAG_MAX_AGE: isize = 2103;
-pub const TAG_DEPTH: isize = 2104;
-pub const TAG_ARTIFACT_BASE: isize = 2200;
-pub const TAG_CHECK_UPDATES: isize = 2105;
+/// Base tags for the two kinds of row an action has to identify.
+pub const TAG_GROUP_BASE: isize = 2200;
+pub const TAG_ROOT_BASE: isize = 2300;
 
-const INTERVALS: &[(u64, &str)] = &[
-    (0, "Off"),
-    (1, "1h"),
-    (6, "6h"),
-    (12, "12h"),
-    (24, "1d"),
-];
+const MAX_HEIGHT: f64 = 540.0;
+const BRAND_H: f64 = 56.0;
+const FOOTER_H: f64 = 44.0;
+/// Room for every section at once. What the body actually uses is measured off
+/// the drawing rather than predicted by a second copy of the layout.
+const SHEET_H: f64 = 1400.0;
 
-pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
-    let artifact_rows = ARTIFACT_DIRS.len();
-    let height = 86.0 + 210.0 + 90.0 + artifact_rows as f64 * 36.0 + 80.0 + 48.0;
+const INTERVALS: &[(u64, &str)] = &[(0, "Off"), (1, "1h"), (6, "6h"), (12, "12h"), (24, "1d")];
+
+pub fn build(
+    state: &AppState,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> (Retained<NSView>, f64) {
+    let sheet = widgets::root_view(SHEET_H, theme.surface, mtm);
+    let used = SHEET_H - draw_body(&sheet, SHEET_H, state, theme, target, mtm);
+
+    let body_h = used.min(MAX_HEIGHT - BRAND_H - FOOTER_H);
+    let height = BRAND_H + body_h + FOOTER_H;
     let root = widgets::root_view(height, theme.surface, mtm);
-    let mut y = height;
-    y = draw_brand(&root, y, theme, mtm);
-    y = draw_cleaning(&root, y, state, theme, target, mtm);
-    y = draw_artifacts(&root, y, state, theme, target, mtm);
-    y = draw_general(&root, y, state, theme, target, mtm);
-    y = draw_roots(&root, y, state, theme, mtm);
-    add_line(&root, 0.0, 36.0, POPOVER_WIDTH, theme.line, mtm);
-    text_button(&root, "Back", PAD_X, 8.0, 50.0, sel!(handleDoneAck:), target, TAG_QUIT - 1, theme.ink_2, mtm);
-    text_button(
-        &root, "Quit", POPOVER_WIDTH - PAD_X - 50.0, 8.0, 50.0, sel!(quit:), target, TAG_QUIT,
-        theme.ink_2, mtm,
-    );
-    let _ = y;
+    draw_brand(&root, height, theme, mtm);
+    let document =
+        crate::scrolling::scroll_document_view(&root, 0.0, FOOTER_H, POPOVER_WIDTH, body_h, used, mtm);
+    // The sheet is taller than what it drew, so hang it from the document's top
+    // edge and let the empty tail fall below the scroller.
+    sheet.setFrameOrigin(NSPoint::new(0.0, document.frame().size.height - SHEET_H));
+    document.addSubview(&sheet);
+    draw_footer(&root, theme, target, mtm);
     (root, height)
 }
 
-fn draw_cleaning(
-    root: &NSView,
+fn draw_body(
+    sheet: &NSView,
     mut y: f64,
     state: &AppState,
     theme: &Theme,
     target: &AnyObject,
     mtm: MainThreadMarker,
 ) -> f64 {
-    y = section(root, y, "cleaning", theme, mtm);
-    y = cycle_row(
-        root, y, "Auto clean", interval_label(state.config.auto_clean_hours),
-        sel!(settingsCycleInterval:), TAG_INTERVAL, theme, target, mtm,
+    y = draw_scanning(sheet, y, state, theme, target, mtm);
+    y = divider(sheet, y, theme, mtm);
+    y = draw_groups(sheet, y, state, theme, target, mtm);
+    y = divider(sheet, y, theme, mtm);
+    y = draw_safety(sheet, y, state, theme, target, mtm);
+    y = divider(sheet, y, theme, mtm);
+    y = crate::settings_roots::draw_roots(sheet, y, state, theme, target, mtm);
+    y = divider(sheet, y, theme, mtm);
+    y = draw_application(sheet, y, state, theme, target, mtm);
+    y - 10.0
+}
+
+fn draw_scanning(
+    parent: &NSView,
+    mut y: f64,
+    state: &AppState,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> f64 {
+    y = section(parent, y, "SCANNING", theme, mtm);
+    y = value_row(
+        parent, y,
+        &Spec { title: "Auto clean", hint: None, action: sel!(settingsCycleInterval:) },
+        Some(interval_label(state.config.auto_clean_hours)), theme, target, mtm,
     );
-    y = keep_days_slider(root, y, state.config.max_age_days, theme, target, mtm);
     let depth = format!("{} levels", state.config.max_depth);
-    cycle_row(
-        root, y, "Scan depth", &depth, sel!(settingsCycleDepth:), TAG_DEPTH, theme, target, mtm,
+    y = value_row(
+        parent, y,
+        &Spec {
+            title: "Scan depth",
+            hint: Some("How far below each root to look"),
+            action: sel!(settingsCycleDepth:),
+        },
+        Some(&depth), theme, target, mtm,
+    );
+    switch_row(
+        parent, y,
+        &Spec {
+            title: "Show size in menu bar",
+            hint: Some("The reclaimable total beside the glyph"),
+            action: sel!(settingsToggleMenuBarSize:),
+        },
+        state.config.menu_bar_size, theme, target, mtm,
     )
 }
 
-fn draw_artifacts(
-    root: &NSView,
+fn draw_groups(
+    parent: &NSView,
     mut y: f64,
     state: &AppState,
     theme: &Theme,
     target: &AnyObject,
     mtm: MainThreadMarker,
 ) -> f64 {
-    y = section(root, y, "artifact types", theme, mtm);
-    for (index, name) in ARTIFACT_DIRS.iter().enumerate() {
-        let on = state.config.artifact_types.iter().any(|v| v == name);
-        y = switch_row(
-            root, y, name, None, on, sel!(settingsToggleArtifact:),
-            TAG_ARTIFACT_BASE + index as isize, theme, target, mtm,
+    y = section(parent, y, "WHAT TO SCAN", theme, mtm);
+    for &group in ArtifactGroup::ALL {
+        let size = group_total(state, group);
+        y = group_row(
+            parent, y,
+            &GroupSpec {
+                symbol: group.symbol(),
+                title: group.title(),
+                size: &size,
+                on: state.config.scans(group),
+                action: sel!(settingsToggleGroup:),
+                tag: TAG_GROUP_BASE + group.tag(),
+            },
+            theme, target, mtm,
         );
     }
     y
 }
 
-fn draw_general(
-    root: &NSView,
+/// What a group accounts for, from the scan that is running or has finished.
+///
+/// A group that is switched off was never looked for, and says so rather than
+/// reporting the nothing it found. A group switched back on has no figure until
+/// the rescan reaches it, and a total still being added to is drawn as a floor —
+/// the same three states the scan list's group headers use.
+fn group_total(state: &AppState, group: ArtifactGroup) -> String {
+    if !state.config.scans(group) {
+        return "\u{2014}".to_string();
+    }
+    let bytes = state.group_size(group);
+    let settled = state.group_settled(group) && !crate::tasks::is_busy();
+    if !settled && bytes == 0 {
+        return "\u{2026}".to_string();
+    }
+    let floor = if settled { "" } else { "\u{2265} " };
+    format!("{floor}{}", scan_size(bytes))
+}
+
+fn draw_safety(
+    parent: &NSView,
     mut y: f64,
     state: &AppState,
     theme: &Theme,
     target: &AnyObject,
     mtm: MainThreadMarker,
 ) -> f64 {
-    y = section(root, y, "general", theme, mtm);
+    y = section(parent, y, "SAFETY", theme, mtm);
+    let days = state.config.max_age_days;
+    label(parent, "Keep builds newer than", PAD_X, y - 20.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
+    let age = if days == 1 { "1 day".to_string() } else { format!("{days} days") };
+    label_right(parent, &age, PAD_X + 200.0, y - 20.0, CONTENT_WIDTH - 200.0, 16.0, 12.5, theme.ink, true, mtm);
+    days_slider(parent, days, PAD_X, y - 48.0, CONTENT_WIDTH, sel!(settingsSetMaxAge:), target, 0, mtm);
+    label(parent, "0d", PAD_X, y - 66.0, 40.0, 14.0, 10.5, false, theme.ink_4, true, mtm);
+    label_right(parent, "30d", PAD_X + CONTENT_WIDTH - 40.0, y - 66.0, 40.0, 14.0, 10.5, theme.ink_4, true, mtm);
+    y - 78.0
+}
+
+fn draw_application(
+    parent: &NSView,
+    mut y: f64,
+    state: &AppState,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> f64 {
+    y = section(parent, y, "APPLICATION", theme, mtm);
     y = switch_row(
-        root, y, "Launch at Login", None, crate::autostart::is_enabled(),
-        sel!(settingsToggleLoginItem:), TAG_LOGIN, theme, target, mtm,
+        parent, y,
+        &Spec { title: "Launch at login", hint: None, action: sel!(settingsToggleLoginItem:) },
+        crate::autostart::is_enabled(), theme, target, mtm,
     );
-    if let Some(updater) = state.updater.as_ref() {
-        y = switch_row(
-            root, y, "Automatic updates", None, updater.automatic_checks(),
-            sel!(settingsToggleAutoUpdate:), TAG_AUTO_UPDATE, theme, target, mtm,
-        );
-        text_button(
-            root, "Check for Updates\u{2026}", PAD_X, y - 28.0, 160.0,
-            sel!(settingsCheckForUpdates:), target, TAG_CHECK_UPDATES, theme.ink_2, mtm,
-        );
-        y -= 36.0;
-    }
-    y
-}
-
-fn draw_roots(root: &NSView, mut y: f64, state: &AppState, theme: &Theme, mtm: MainThreadMarker) -> f64 {
-    y = section(root, y, "roots", theme, mtm);
-    for dir in &state.config.scan_dirs {
-        let text = crate::names::display_path(dir);
-        label(root, &text, PAD_X, y - 22.0, CONTENT_WIDTH, 16.0, 12.0, false, theme.ink, true, mtm);
-        y -= 28.0;
-    }
-    label(
-        root, "Edit scan roots in ~/.config/wd-40/config.toml", PAD_X, y - 18.0,
-        CONTENT_WIDTH, 14.0, 11.5, false, theme.ink_3, false, mtm,
+    let Some(updater) = state.updater.as_ref() else { return y };
+    y = switch_row(
+        parent, y,
+        &Spec {
+            title: "Automatic updates",
+            hint: Some("Check for a new version in the background"),
+            action: sel!(settingsToggleAutoUpdate:),
+        },
+        updater.automatic_checks(), theme, target, mtm,
     );
-    y - 28.0
+    value_row(
+        parent, y,
+        &Spec { title: "Check for updates\u{2026}", hint: None, action: sel!(settingsCheckForUpdates:) },
+        None, theme, target, mtm,
+    )
 }
 
-fn draw_brand(parent: &NSView, y_top: f64, theme: &Theme, mtm: MainThreadMarker) -> f64 {
-    add_fill(parent, PAD_X, y_top - 44.0, 30.0, 30.0, theme.ink, 1.0, 8.0, mtm);
-    label(parent, "40", PAD_X + 6.0, y_top - 38.0, 20.0, 18.0, 11.0, true, theme.surface, true, mtm);
-    label(parent, "WD-40", PAD_X + 42.0, y_top - 32.0, 120.0, 18.0, 14.5, true, theme.ink, false, mtm);
-    let ver = format!("v{}", crate::updater::bundle_version());
-    label(parent, &ver, PAD_X + 42.0, y_top - 48.0, 160.0, 14.0, 11.0, false, theme.ink_3, true, mtm);
-    add_line(parent, 0.0, y_top - 62.0, POPOVER_WIDTH, theme.line, mtm);
-    y_top - 70.0
+fn draw_brand(parent: &NSView, y_top: f64, theme: &Theme, mtm: MainThreadMarker) {
+    let tile = y_top - 44.0;
+    add_fill(parent, PAD_X, tile, 30.0, 30.0, theme.ink, 1.0, 8.0, mtm);
+    let mark = fitted_width("40", 11.0, true, mtm);
+    label(parent, "40", PAD_X + (30.0 - mark) / 2.0, tile + 7.0, mark + 2.0, 16.0, 11.0, false, theme.surface, true, mtm);
+    label(parent, "WD-40", PAD_X + 41.0, tile + 14.0, 120.0, 18.0, 14.5, true, theme.ink, false, mtm);
+    let version = format!("v{}", crate::updater::bundle_version());
+    label(parent, &version, PAD_X + 41.0, tile - 1.0, 160.0, 15.0, 11.0, false, theme.ink_3, true, mtm);
+    add_line(parent, 0.0, y_top - BRAND_H, POPOVER_WIDTH, theme.line, mtm);
 }
 
-fn section(parent: &NSView, y_top: f64, title: &str, theme: &Theme, mtm: MainThreadMarker) -> f64 {
-    label(parent, title, PAD_X, y_top - 18.0, CONTENT_WIDTH, 14.0, 11.0, false, theme.ink_3, true, mtm);
-    y_top - 28.0
-}
+fn draw_footer(parent: &NSView, theme: &Theme, target: &AnyObject, mtm: MainThreadMarker) {
+    add_line(parent, 0.0, FOOTER_H, POPOVER_WIDTH, theme.line, mtm);
+    widgets::symbol_view(parent, "chevron.left", PAD_X, 16.5, 11.0, theme.ink_4, mtm);
+    let back = fitted_width("Back", 12.5, false, mtm) + 4.0;
+    text_button(parent, "Back", PAD_X + 15.0, 11.0, back, sel!(settingsBack:), target, 0, theme.ink_2, mtm);
 
-fn keep_days_slider(
-    parent: &NSView,
-    y_top: f64,
-    days: u64,
-    theme: &Theme,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) -> f64 {
-    let y = y_top - 72.0;
-    label(parent, "Keep builds newer than", PAD_X, y + 50.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
-    let age = if days == 1 {
-        "1 day".into()
-    } else {
-        format!("{days} days")
-    };
-    label_right(parent, &age, PAD_X + 200.0, y + 50.0, CONTENT_WIDTH - 200.0, 16.0, 12.5, theme.ink, true, mtm);
-    days_slider(
-        parent, days, PAD_X, y + 22.0, CONTENT_WIDTH, sel!(settingsSetMaxAge:), target, TAG_MAX_AGE, mtm,
-    );
-    label(parent, "0d", PAD_X, y + 2.0, 40.0, 14.0, 10.5, false, theme.ink_4, true, mtm);
-    label_right(parent, "30d", PAD_X + CONTENT_WIDTH - 40.0, y + 2.0, 40.0, 14.0, 10.5, theme.ink_4, true, mtm);
-    y
-}
-
-#[allow(clippy::too_many_arguments)]
-fn switch_row(
-    parent: &NSView,
-    y_top: f64,
-    title: &str,
-    hint: Option<&str>,
-    on: bool,
-    action: Sel,
-    tag: isize,
-    theme: &Theme,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) -> f64 {
-    let h = if hint.is_some() { 44.0 } else { 36.0 };
-    let y = y_top - h;
-    label(parent, title, PAD_X, y + h - 22.0, 240.0, 16.0, 13.5, false, theme.ink, false, mtm);
-    if let Some(hint) = hint {
-        label(parent, hint, PAD_X, y + 4.0, 240.0, 14.0, 11.5, false, theme.ink_3, false, mtm);
-    }
-    pill_switch(
-        parent, on, POPOVER_WIDTH - PAD_X - 38.0, y + (h - 22.0) / 2.0, action, tag, theme, target, mtm,
-    );
-    y
-}
-
-#[allow(clippy::too_many_arguments)]
-fn cycle_row(
-    parent: &NSView,
-    y_top: f64,
-    title: &str,
-    value: &str,
-    action: Sel,
-    tag: isize,
-    theme: &Theme,
-    target: &AnyObject,
-    mtm: MainThreadMarker,
-) -> f64 {
-    let y = y_top - 36.0;
-    label(parent, title, PAD_X, y + 10.0, 200.0, 16.0, 13.5, false, theme.ink, false, mtm);
-    text_button(
-        parent, value, POPOVER_WIDTH - PAD_X - 70.0, y + 8.0, 70.0, action, target, tag,
-        theme.ink_2, mtm,
-    );
-    y
+    let hint = fitted_width("\u{2318}Q", 11.0, true, mtm) + 4.0;
+    let quit_w = fitted_width("Quit", 12.5, false, mtm) + 4.0;
+    let quit_x = POPOVER_WIDTH - PAD_X - hint - 6.0 - quit_w;
+    let quit = text_button(parent, "Quit", quit_x, 11.0, quit_w, sel!(quit:), target, 0, theme.ink_2, mtm);
+    set_cmd_key(&quit, "q");
+    label(parent, "\u{2318}Q", POPOVER_WIDTH - PAD_X - hint, 13.0, hint, 16.0, 11.0, false, theme.ink_4, true, mtm);
 }
 
 fn interval_label(hours: u64) -> &'static str {

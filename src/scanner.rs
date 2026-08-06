@@ -35,6 +35,17 @@ pub enum ArtifactKind {
 }
 
 impl ArtifactKind {
+    /// What a directory name discovered by the walk stands for. `discover` and
+    /// the settings screen have to agree on this, or a group could be switched
+    /// off and still be found.
+    pub fn for_dir_name(name: &str) -> Self {
+        match name {
+            "target" => Self::RustTarget,
+            "node_modules" => Self::NodeModules,
+            _ => Self::BuildOutput,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::RustTarget => "target",
@@ -125,6 +136,27 @@ impl ArtifactGroup {
             Self::NodeModules => "Node Modules",
             Self::BuildOutput => "Build Output",
             Self::Caches => "Caches",
+        }
+    }
+
+    /// How the group is named to the user in the popover.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Rust => "Rust targets",
+            Self::NodeModules => "node_modules",
+            Self::BuildOutput => "Build output",
+            Self::Caches => "Caches",
+        }
+    }
+
+    /// Stable key for the config file. Never derived from `label`, which is
+    /// prose and may be reworded.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::NodeModules => "node_modules",
+            Self::BuildOutput => "build_output",
+            Self::Caches => "caches",
         }
     }
 

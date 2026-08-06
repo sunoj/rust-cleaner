@@ -2,20 +2,22 @@
 // back the handles that let a size arrive, or a tick land, without the list
 // being rebuilt underneath.
 // Exports: `ROW_H`, `GROUP_H`, `draw_group_header`, `draw_row`, `show_size`,
-// `show_group_size`. Deps: crate::{checkbox, header, hover_row, live, widgets}.
+// `show_group_size`.
+// Deps: crate::{checkbox, header, hover_row, live, names, reveal, widgets}.
 
 use crate::checkbox::checkbox;
 use crate::header::scan_size;
-use crate::hover_row::hover_row;
+use crate::hover_row::{hover_row, HoverRow};
 use crate::live::{Group, Row};
-use crate::names::age_short;
+use crate::names::{age_short, display_path};
+use crate::reveal::{reveal_button, SIDE as REVEAL_SIDE};
 use crate::selection::{is_recent, GroupSelection};
 use crate::theme::Theme;
 use crate::widgets::{self, label, label_right, label_tracked, PAD_X, POPOVER_WIDTH};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::sel;
-use objc2_app_kit::{NSBox, NSTextField, NSView};
+use objc2_app_kit::{NSBox, NSLineBreakMode, NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 use wd40::scanner::{ArtifactGroup, TargetDir};
 
@@ -25,6 +27,16 @@ pub const GROUP_H: f64 = 33.0;
 const UNKNOWN: &str = "\u{2026}";
 /// Marks a total that is still being added to.
 const FLOOR: &str = "\u{2265} ";
+/// The reveal control sits at the row's right edge; the size reads up to it.
+const REVEAL_X: f64 = POPOVER_WIDTH - PAD_X - REVEAL_SIDE;
+const SIZE_X: f64 = PAD_X + 250.0;
+const SIZE_W: f64 = REVEAL_X - 6.0 - SIZE_X;
+/// The second line, which the pointer turns into the row's path. It stops short
+/// of the RECENT badge where there is one, and of the size where there is not.
+const DETAIL_X: f64 = PAD_X + 26.0;
+const NAME_W: f64 = 220.0;
+const DETAIL_W_BADGE: f64 = 150.0;
+const DETAIL_W: f64 = SIZE_X - DETAIL_X - 6.0;
 
 pub struct GroupModel {
     pub group: ArtifactGroup,
@@ -118,14 +130,44 @@ pub fn draw_row(
     // banded every row into three tones.
     let wash = draw_wash(&row, model, theme, mtm);
     let check = checkbox(&row, GroupSelection::from(model.on), PAD_X, 13.0, sel!(handleToggleItem:), target, tag, theme, mtm);
-    label(&row, model.name, PAD_X + 26.0, 18.0, 220.0, 16.0, 13.5, false, theme.ink, false, mtm);
-    label(&row, &meta(model.target), PAD_X + 26.0, 4.0, 150.0, 14.0, 11.0, false, theme.ink_3, true, mtm);
-    if is_recent(model.target, model.max_age_days) {
+    let name = label(&row, model.name, DETAIL_X, 18.0, NAME_W, 16.0, 13.5, false, theme.ink, false, mtm);
+    // A device or project name can outrun the column; ending it in an ellipsis
+    // says so, where a hard clip reads as a name that happens to look odd.
+    name.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    let recent = is_recent(model.target, model.max_age_days);
+    draw_detail(&row, model, recent, theme, mtm);
+    if recent {
         draw_recent_badge(&row, theme, mtm);
     }
-    let size = label_right(&row, "", PAD_X + 250.0, 12.0, widgets::CONTENT_WIDTH - 250.0, 16.0, 13.0, theme.ink, true, mtm);
+    let size = label_right(&row, "", SIZE_X, 12.0, SIZE_W, 16.0, 13.0, theme.ink, true, mtm);
     show_size(&size, model.measured.then_some(model.target.size_bytes));
+    // Its own action, so `HoverRow::hitTest` leaves the click with it: opening
+    // Finder must not also tick the row it sits in.
+    reveal_button(
+        &row, REVEAL_X, (ROW_H - REVEAL_SIDE) / 2.0, sel!(handleRevealItem:), target,
+        crate::scan_view::TAG_REVEAL_BASE + model.index as isize, theme.ink_3, mtm,
+    );
     (y, Row { index: model.index, size, check, wash })
+}
+
+/// The line under the name: what the row is, and — while the pointer is on it —
+/// which directory it is. A path is longer than the line, so it is cut in the
+/// middle, where a path carries the least; the tooltip holds the whole of it.
+fn draw_detail(
+    row: &HoverRow,
+    model: &RowModel<'_>,
+    recent: bool,
+    theme: &Theme,
+    mtm: MainThreadMarker,
+) {
+    let width = if recent { DETAIL_W_BADGE } else { DETAIL_W };
+    let rest = meta(model.target);
+    let path = display_path(&model.target.path);
+    let field = label(row, &rest, DETAIL_X, 4.0, width, 14.0, 11.0, false, theme.ink_3, true, mtm);
+    field.setUsesSingleLineMode(true);
+    field.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
+    row.set_detail(&field, &rest, &path);
+    row.setToolTip(Some(&NSString::from_str(&model.target.path.to_string_lossy())));
 }
 
 fn draw_wash(

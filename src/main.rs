@@ -4,6 +4,7 @@
 
 mod actions;
 mod autostart;
+mod cache_names;
 mod can;
 mod checkbox;
 mod clean_view;
@@ -24,12 +25,15 @@ mod mainthread;
 mod names;
 mod plate;
 mod popover;
+mod reveal;
 mod scan_rows;
 mod scrolling;
 mod scan_view;
 #[cfg(debug_assertions)]
 mod screenshot;
 mod selection;
+mod settings_roots;
+mod settings_row;
 mod settings_view;
 mod spray;
 mod state;
@@ -78,10 +82,18 @@ define_class!(
         fn handle_toggle_group(&self, sender: &NSButton) {
             let index = (sender.tag() - scan_view::TAG_GROUP_BASE) as usize;
             let Some(&group) = wd40::scanner::ArtifactGroup::ALL.get(index) else { return };
-            with_state(|state| selection::toggle_group(&state.targets, &mut state.selected, group));
+            with_state(|state| {
+                let empty = state.empty_targets();
+                selection::toggle_group(&state.targets, &mut state.selected, group, &empty);
+            });
             if !live::selection_changed(self.mtm()) {
                 popover::refresh(self.mtm());
             }
+        }
+
+        #[unsafe(method(handleRevealItem:))]
+        fn handle_reveal_item(&self, sender: &NSButton) {
+            reveal::reveal_item(sender.tag());
         }
 
         #[unsafe(method(handleCleanSelected:))]
@@ -131,9 +143,29 @@ define_class!(
             actions::cycle_depth(self.mtm());
         }
 
-        #[unsafe(method(settingsToggleArtifact:))]
-        fn settings_toggle_artifact(&self, sender: &NSButton) {
-            actions::toggle_artifact(sender, self.mtm());
+        #[unsafe(method(settingsToggleGroup:))]
+        fn settings_toggle_group(&self, sender: &NSButton) {
+            actions::toggle_scan_group(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsToggleMenuBarSize:))]
+        fn settings_toggle_menu_bar_size(&self, _sender: &AnyObject) {
+            actions::toggle_menu_bar_size(self.mtm());
+        }
+
+        #[unsafe(method(settingsAddRoot:))]
+        fn settings_add_root(&self, _sender: &AnyObject) {
+            actions::add_scan_root(self.mtm());
+        }
+
+        #[unsafe(method(settingsRemoveRoot:))]
+        fn settings_remove_root(&self, sender: &NSButton) {
+            actions::remove_scan_root(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsBack:))]
+        fn settings_back(&self, _sender: &AnyObject) {
+            actions::close_settings(self.mtm());
         }
 
         #[unsafe(method(settingsToggleLoginItem:))]

@@ -4,11 +4,11 @@
 
 use crate::popover;
 use crate::settings_view;
-use crate::state::{with_state, UiScreen};
+use crate::state::{with_state, with_state_ret, UiScreen};
 use crate::tasks;
 use objc2_app_kit::{NSAlert, NSAlertStyle, NSApplication, NSButton};
 use objc2_foundation::{MainThreadMarker, NSString};
-use wd40::config::{merge_artifact_types, ARTIFACT_DIRS};
+use wd40::scanner::ArtifactGroup;
 
 pub fn toggle_item(tag: isize, mtm: MainThreadMarker) {
     let index = (tag - crate::scan_view::TAG_ITEM_BASE) as usize;
@@ -34,8 +34,20 @@ pub fn show_more(mtm: MainThreadMarker) {
     popover::refresh(mtm);
 }
 
+/// Both settings screens scroll, and they do not share a place in a list, so a
+/// screen change starts at the top rather than at the other screen's offset.
 pub fn open_settings(mtm: MainThreadMarker) {
+    crate::scrolling::reset_scroll();
     with_state(|state| state.screen = UiScreen::Settings);
+    popover::refresh(mtm);
+}
+
+/// Leave settings for the list. Deliberately no rescan: the controls that need
+/// one start it themselves, and rescanning here would clear the ticks the user
+/// had already made before they came in.
+pub fn close_settings(mtm: MainThreadMarker) {
+    crate::scrolling::reset_scroll();
+    with_state(|state| state.screen = UiScreen::Scan);
     popover::refresh(mtm);
 }
 
@@ -77,23 +89,50 @@ pub fn cycle_depth(mtm: MainThreadMarker) {
     tasks::start_scan(false);
 }
 
-pub fn toggle_artifact(sender: &NSButton, mtm: MainThreadMarker) {
-    let index = (sender.tag() - settings_view::TAG_ARTIFACT_BASE) as usize;
-    let Some(name) = ARTIFACT_DIRS.get(index).copied() else { return };
+/// Switch one artifact group in or out of the scan. What is on screen came from
+/// the old set, so the scan is redone rather than filtered.
+pub fn toggle_scan_group(sender: &NSButton, mtm: MainThreadMarker) {
+    let Some(group) = ArtifactGroup::from_tag(sender.tag() - settings_view::TAG_GROUP_BASE) else {
+        return;
+    };
     with_state(|state| {
-        let mut selected: Vec<String> = state
-            .config
-            .artifact_types
-            .iter()
-            .filter(|v| ARTIFACT_DIRS.iter().any(|k| k == &v.as_str()))
-            .cloned()
-            .collect();
-        if let Some(pos) = selected.iter().position(|v| v == name) {
-            selected.remove(pos);
-        } else {
-            selected.push(name.to_string());
+        let on = state.config.scans(group);
+        state.config.set_scans(group, !on);
+        state.config.save();
+    });
+    popover::refresh(mtm);
+    tasks::start_scan(false);
+}
+
+pub fn toggle_menu_bar_size(mtm: MainThreadMarker) {
+    with_state(|state| {
+        state.config.menu_bar_size = !state.config.menu_bar_size;
+        state.config.save();
+    });
+    popover::refresh(mtm);
+}
+
+/// Add a folder to the scan roots. The panel is a window of its own, so the
+/// popover dismisses itself while it is up; the new root is scanned straight
+/// away and is there on the next open.
+pub fn add_scan_root(mtm: MainThreadMarker) {
+    let existing = with_state_ret(|state| state.config.scan_dirs.clone()).unwrap_or_default();
+    let Some(path) = crate::settings_roots::choose_root(&existing, mtm) else { return };
+    with_state(|state| {
+        state.config.scan_dirs.push(path);
+        state.config.save();
+    });
+    popover::refresh(mtm);
+    tasks::start_scan(false);
+}
+
+pub fn remove_scan_root(sender: &NSButton, mtm: MainThreadMarker) {
+    let index = (sender.tag() - settings_view::TAG_ROOT_BASE) as usize;
+    with_state(|state| {
+        if index >= state.config.scan_dirs.len() {
+            return;
         }
-        state.config.artifact_types = merge_artifact_types(&state.config.artifact_types, &selected);
+        state.config.scan_dirs.remove(index);
         state.config.save();
     });
     popover::refresh(mtm);

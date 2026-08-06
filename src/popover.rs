@@ -196,7 +196,7 @@ fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
     if let Some(image) = rusty_icon(total) {
         button.setImage(Some(&image));
     }
-    if total < 1024 * 1024 * 1024 {
+    if !state.config.menu_bar_size || total < 1024 * 1024 * 1024 {
         button.setTitle(ns_string!(""));
         return;
     }

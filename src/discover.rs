@@ -5,7 +5,7 @@
 
 use crate::config::Config;
 use crate::roots;
-use crate::scanner::{ArtifactKind, TargetDir};
+use crate::scanner::{ArtifactGroup, ArtifactKind, TargetDir};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
@@ -22,10 +22,26 @@ const SKIP_DIRS: &[&str] = &[
     "Volumes",
 ];
 
+/// Directory names to match, once the groups the user switched off are taken
+/// out. A name the app does not know counts as build output, which is the same
+/// kind `walk` will give it if it is found.
+pub fn walk_types(config: &Config) -> Vec<&str> {
+    config
+        .artifact_types
+        .iter()
+        .map(String::as_str)
+        .filter(|name| config.scans(ArtifactKind::for_dir_name(name).group()))
+        .collect()
+}
+
 /// Discover artifact directories. Sizes are all zero on return.
 pub fn scan_discover(config: &Config) -> Vec<TargetDir> {
-    let types: Vec<&str> = config.artifact_types.iter().map(String::as_str).collect();
-    let dirs: Vec<&PathBuf> = config.scan_dirs.iter().filter(|dir| dir.exists()).collect();
+    let types = walk_types(config);
+    let dirs: Vec<&PathBuf> = match types.is_empty() {
+        // Nothing the walk could match, so there is nothing to walk for.
+        true => Vec::new(),
+        false => config.scan_dirs.iter().filter(|dir| dir.exists()).collect(),
+    };
     let mut found: Vec<TargetDir> = std::thread::scope(|scope| {
         let handles: Vec<_> = dirs
             .iter()
@@ -38,10 +54,16 @@ pub fn scan_discover(config: &Config) -> Vec<TargetDir> {
             .collect();
         handles.into_iter().flat_map(|handle| handle.join().unwrap_or_default()).collect()
     });
-    roots::collect_tmp_targets(&mut found);
-    roots::collect_shared_cargo_target(&mut found);
-    roots::collect_aid_worktrees(&mut found);
-    roots::collect_dev_caches(&mut found);
+    // The roots below are collected by name rather than walked for, so each one
+    // has to be gated on its own group here.
+    if config.scans(ArtifactGroup::Rust) {
+        roots::collect_tmp_targets(&mut found);
+        roots::collect_shared_cargo_target(&mut found);
+        roots::collect_aid_worktrees(&mut found);
+    }
+    if config.scans(ArtifactGroup::Caches) {
+        roots::collect_dev_caches(&mut found);
+    }
     found
 }
 
@@ -60,11 +82,7 @@ fn walk(dir: &Path, types: &[&str], artifact_types: &[String], max_depth: usize)
         if !types.contains(&name.as_ref()) || !is_dev_artifact(entry.path(), &name) {
             continue;
         }
-        let kind = match name.as_ref() {
-            "target" => ArtifactKind::RustTarget,
-            "node_modules" => ArtifactKind::NodeModules,
-            _ => ArtifactKind::BuildOutput,
-        };
+        let kind = ArtifactKind::for_dir_name(name.as_ref());
         let last_modified = entry
             .metadata()
             .ok()
@@ -125,7 +143,9 @@ pub(crate) fn is_dev_artifact(path: &Path, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_dev_artifact;
+    use super::{is_dev_artifact, walk_types};
+    use crate::config::Config;
+    use crate::scanner::ArtifactGroup;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -154,6 +174,28 @@ mod tests {
 
         assert!(is_dev_artifact(&node_modules, "node_modules"));
         cleanup(&root);
+    }
+
+    #[test]
+    fn a_group_switched_off_takes_its_dir_names_out_of_the_walk() {
+        let mut config = Config::default();
+        config.set_scans(ArtifactGroup::BuildOutput, false);
+        let types = walk_types(&config);
+        assert!(types.contains(&"target"));
+        assert!(types.contains(&"node_modules"));
+        assert!(!types.contains(&"dist"));
+        assert!(!types.contains(&".next"));
+    }
+
+    /// A name the app does not know is build output as far as the walk is
+    /// concerned, so the build output switch has to govern it too.
+    #[test]
+    fn a_custom_dir_name_follows_the_build_output_group() {
+        let mut config = Config::default();
+        config.artifact_types.push("vendor".to_string());
+        assert!(walk_types(&config).contains(&"vendor"));
+        config.set_scans(ArtifactGroup::BuildOutput, false);
+        assert!(!walk_types(&config).contains(&"vendor"));
     }
 
     #[test]

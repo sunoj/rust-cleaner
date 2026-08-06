@@ -41,7 +41,7 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
             draw_hero(&root, height, s, theme, mtm);
             let mut y = height - HERO_H;
             for row in &s.removed {
-                y = draw_row(&root, y, row.count, group_label(row.group), &scan_size(row.bytes), false, theme, mtm);
+                y = draw_row(&root, y, row.count, ArtifactGroup::title(row.group), &scan_size(row.bytes), false, theme, mtm);
             }
             if s.skipped_count > 0 {
                 y = draw_row(&root, y, s.skipped_count, "Left in place \u{2014} not selected", &scan_size(s.skipped_bytes), true, theme, mtm);
@@ -141,15 +141,6 @@ fn elapsed_text(seconds: u64) -> String {
     match seconds {
         0..=89 => format!("{}s", seconds.max(1)),
         _ => format!("{}m {}s", seconds / 60, seconds % 60),
-    }
-}
-
-fn group_label(group: ArtifactGroup) -> &'static str {
-    match group {
-        ArtifactGroup::Rust => "Rust targets",
-        ArtifactGroup::NodeModules => "node_modules",
-        ArtifactGroup::BuildOutput => "Build output",
-        ArtifactGroup::Caches => "Caches",
     }
 }
 

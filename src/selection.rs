@@ -1,6 +1,7 @@
-// Per-item clean selection: nothing starts checked; the user opts in.
-// Exports: `default_selection`, `selected_bytes`, `is_recent`.
-// Deps: std, wd40::scanner::TargetDir.
+// Per-item clean selection: nothing starts checked; the user opts in. Also
+// which targets the list is entitled to show at all.
+// Exports: `default_selection`, `selected_bytes`, `is_recent`, `empty_measured`,
+// `settled_order`. Deps: std, wd40::scanner::TargetDir.
 
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
@@ -41,6 +42,30 @@ pub fn default_selection(_targets: &[TargetDir], _max_age_days: u64) -> HashSet<
     HashSet::new()
 }
 
+/// Targets the list leaves out: measured, and holding nothing. A directory that
+/// returns nothing is noise in a list you scroll.
+///
+/// Measured is the whole point of the test. Sizes land one at a time, and a
+/// target reads zero until its own figure arrives — filtering on "zero bytes"
+/// would hide every row that has not been measured yet and pop them into
+/// existence one by one as the pass ran.
+pub fn empty_measured(targets: &[TargetDir], measured: &HashSet<usize>) -> HashSet<usize> {
+    measured
+        .iter()
+        .copied()
+        .filter(|index| targets.get(*index).is_some_and(|target| target.size_bytes == 0))
+        .collect()
+}
+
+/// The order the list settles into once every figure is in: largest first, with
+/// the measured-empty left out for good. Returns positions in `targets`.
+pub fn settled_order(targets: &[TargetDir], measured: &HashSet<usize>) -> Vec<usize> {
+    let empty = empty_measured(targets, measured);
+    let mut order: Vec<usize> = (0..targets.len()).filter(|index| !empty.contains(index)).collect();
+    order.sort_by_key(|index| std::cmp::Reverse(targets[*index].size_bytes));
+    order
+}
+
 pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
     selected
         .iter()
@@ -48,15 +73,27 @@ pub fn selected_bytes(targets: &[TargetDir], selected: &HashSet<usize>) -> u64 {
         .fold(0_u64, |sum, n| sum.saturating_add(n))
 }
 
+/// The rows of one group that are on screen. An empty target never takes part
+/// in a group's state or its toggle: the box says what the visible rows say,
+/// and ticking it can only ever select what the user can see.
+fn group_rows(targets: &[TargetDir], group: ArtifactGroup, empty: &HashSet<usize>) -> Vec<usize> {
+    targets
+        .iter()
+        .enumerate()
+        .filter(|(index, target)| target.kind.group() == group && !empty.contains(index))
+        .map(|(index, _)| index)
+        .collect()
+}
+
 pub fn group_selection(
     targets: &[TargetDir],
     selected: &HashSet<usize>,
     group: ArtifactGroup,
+    empty: &HashSet<usize>,
 ) -> GroupSelection {
-    let indices = targets.iter().enumerate().filter(|(_, target)| target.kind.group() == group);
-    let (count, selected_count) = indices.fold((0, 0), |(count, selected_count), (index, _)| {
-        (count + 1, selected_count + usize::from(selected.contains(&index)))
-    });
+    let indices = group_rows(targets, group, empty);
+    let count = indices.len();
+    let selected_count = indices.iter().filter(|index| selected.contains(index)).count();
     match selected_count {
         0 => GroupSelection::Off,
         selected_count if selected_count == count => GroupSelection::On,
@@ -64,13 +101,13 @@ pub fn group_selection(
     }
 }
 
-pub fn toggle_group(targets: &[TargetDir], selected: &mut HashSet<usize>, group: ArtifactGroup) {
-    let indices: Vec<usize> = targets
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| target.kind.group() == group)
-        .map(|(index, _)| index)
-        .collect();
+pub fn toggle_group(
+    targets: &[TargetDir],
+    selected: &mut HashSet<usize>,
+    group: ArtifactGroup,
+    empty: &HashSet<usize>,
+) {
+    let indices = group_rows(targets, group, empty);
     let clear = indices.iter().all(|index| selected.contains(index));
     for index in indices {
         if clear {
@@ -91,16 +128,23 @@ pub fn age_days(target: &TargetDir) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_selection, group_selection, is_recent, toggle_group, GroupSelection};
+    use super::{
+        default_selection, empty_measured, group_selection, is_recent, settled_order, toggle_group,
+        GroupSelection,
+    };
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
     use wd40::scanner::{ArtifactGroup, ArtifactKind, TargetDir};
 
     fn target(age_days: u64) -> TargetDir {
+        sized(age_days, 10)
+    }
+
+    fn sized(age_days: u64, size_bytes: u64) -> TargetDir {
         TargetDir {
             path: PathBuf::from("/tmp/cc-target-x"),
-            size_bytes: 10,
+            size_bytes,
             last_modified: SystemTime::now() - Duration::from_secs(age_days * 86_400),
             kind: ArtifactKind::TmpTarget,
         }
@@ -119,11 +163,37 @@ mod tests {
     #[test]
     fn group_toggle_selects_all_then_clears_all() {
         let targets = vec![target(1), target(10)];
+        let none = HashSet::new();
         let mut selected = HashSet::from([0]);
-        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::Mixed);
-        toggle_group(&targets, &mut selected, ArtifactGroup::Rust);
-        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::On);
-        toggle_group(&targets, &mut selected, ArtifactGroup::Rust);
-        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust) == GroupSelection::Off);
+        let state = |selected: &HashSet<usize>| {
+            group_selection(&targets, selected, ArtifactGroup::Rust, &none)
+        };
+        assert!(state(&selected) == GroupSelection::Mixed);
+        toggle_group(&targets, &mut selected, ArtifactGroup::Rust, &none);
+        assert!(state(&selected) == GroupSelection::On);
+        toggle_group(&targets, &mut selected, ArtifactGroup::Rust, &none);
+        assert!(state(&selected) == GroupSelection::Off);
+    }
+
+    /// The group box can only ever tick what the list shows. A target that is
+    /// not on screen must not end up in a job the user cannot see.
+    #[test]
+    fn a_hidden_target_is_outside_the_group_box() {
+        let targets = vec![sized(1, 10), sized(10, 0)];
+        let empty = HashSet::from([1]);
+        let mut selected = HashSet::new();
+        toggle_group(&targets, &mut selected, ArtifactGroup::Rust, &empty);
+        assert_eq!(selected, HashSet::from([0]));
+        assert!(group_selection(&targets, &selected, ArtifactGroup::Rust, &empty) == GroupSelection::On);
+    }
+
+    /// Zero on its own means nothing: it is what every row reads before its own
+    /// figure lands.
+    #[test]
+    fn only_a_measured_zero_counts_as_empty() {
+        let targets = vec![sized(1, 0), sized(1, 0), sized(1, 40)];
+        let measured = HashSet::from([0, 2]);
+        assert_eq!(empty_measured(&targets, &measured), HashSet::from([0]));
+        assert_eq!(settled_order(&targets, &measured), vec![2, 1]);
     }
 }
