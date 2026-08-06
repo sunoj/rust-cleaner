@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use wd40::config::Config;
 use wd40::disk::{disk_space, sum_bytes, DiskSpace};
+use wd40::reclaim::Reclaim;
 use wd40::scanner::{ArtifactGroup, TargetDir};
 
 thread_local! {
@@ -121,6 +122,11 @@ pub(crate) struct AppState {
     pub done: Option<DoneSummary>,
     pub status_item: Retained<NSStatusItem>,
     pub updater: Option<Updater>,
+    /// Device-byte accounting for the targets that can share blocks, once it
+    /// has been worked out. `None` until then, and the totals fall back to
+    /// summed sizes — which overstate, so the promise is only ever made once
+    /// it can be kept.
+    pub reclaim: Option<Reclaim>,
 }
 
 impl AppState {
@@ -130,13 +136,31 @@ impl AppState {
         !self.targets.is_empty() && self.measured.len() < self.targets.len()
     }
 
-    /// Sum of what has been measured. During a scan this only ever grows.
+    /// What everything on the list is worth. Summed allocated sizes until the
+    /// device accounting lands, and the device figure after — on a disk seeded
+    /// by `cp -Rc` those differ fourfold, and only the second is what deleting
+    /// returns. See docs/apfs-clone-overcount.md.
     pub fn total_size(&self) -> u64 {
-        sum_bytes(self.targets.iter().map(|t| t.size_bytes))
+        match self.exact() {
+            Some(exact) => exact.bytes(&self.targets, &|_| true),
+            None => sum_bytes(self.targets.iter().map(|t| t.size_bytes)),
+        }
     }
 
+    /// What the ticked rows are worth. The same accounting, asked about a
+    /// subset: removing one clone of a pair frees nothing its twin still holds.
     pub fn selected_size(&self) -> u64 {
-        selected_bytes(&self.targets, &self.selected)
+        match self.exact() {
+            Some(exact) => exact.bytes(&self.targets, &|index| self.selected.contains(&index)),
+            None => selected_bytes(&self.targets, &self.selected),
+        }
+    }
+
+    /// The accounting, if it still describes the targets on screen. A rescan
+    /// that moved them leaves it stale, and a stale promise is worse than a
+    /// conservative one.
+    fn exact(&self) -> Option<&Reclaim> {
+        self.reclaim.as_ref().filter(|found| found.covers(&self.targets))
     }
 
     pub fn group_size(&self, group: ArtifactGroup) -> u64 {

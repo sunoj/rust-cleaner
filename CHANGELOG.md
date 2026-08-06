@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **Rust toolchains** (`src/toolchains.rs`): a fifth scan group for `~/.rustup/toolchains`, which no scan root reached before — it lives under a dot-directory the walk refuses to enter, and its directory names match no artifact pattern. Six unused toolchains were sitting in 5.1 GB on the machine this was written on.
+
+  A toolchain is not like the other four groups: it is global state rustup owns, it comes back as a network download rather than a rebuild, and it is removed with `rustup toolchain uninstall` — never by deleting the directory, which would leave rustup's record of what is installed lying. The default toolchain, anything `rustup override` points at, any channel a `rust-toolchain.toml` under the scan roots pins, and anything added with `rustup toolchain link` are never offered. When rustup's own settings cannot be read, nothing is offered rather than something guessed.
+- **Cargo's crate downloads** (`src/roots.rs`): `~/.cargo/registry` joins the Caches group — tarballs, unpacked sources and the index, 1.3 GB on this machine, taken from `CARGO_HOME` rather than a hardcoded path. It goes in whole: dropping only the sources leaves the tarballs they came from, and dropping only the tarballs leaves sources cargo will not trust.
 - **Disk panel** (`src/disk_panel.rs`): the menu opens on free space as a headline number, a capacity gauge splitting used / build artifacts / free, and what cleaning would leave. Free disk was a footnote in the header caption before.
 - **Hover reveals the path** (`src/hover.rs`): a highlighted project row swaps its short name for the full path and the artifact's age. `NSMenuItem.toolTip` does not render in status-bar menus, so the row itself is the surface.
 

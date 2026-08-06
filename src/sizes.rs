@@ -7,6 +7,7 @@
 use crate::disk::disk_space;
 use crate::nesting::Publisher;
 use crate::scanner::TargetDir;
+use crate::cache;
 use crate::walk::Walk;
 use getattrlistbulk::{DirReader, ObjectType, RequestedAttributes};
 use std::os::unix::fs::MetadataExt;
@@ -14,10 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-/// Directory reads in flight. Measured on an internal SSD: past this the reads
-/// queue behind one another instead of overlapping, and a thread per target
-/// (which is what this replaces) is far past it.
-const WORKERS: usize = 16;
 
 const BULK_ATTRS: RequestedAttributes = RequestedAttributes {
     name: true,
@@ -45,11 +42,36 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
         return;
     }
     let paths: Vec<PathBuf> = targets.iter().map(|target| target.path.clone()).collect();
-    let walk = Walk::new(&paths);
     let publisher = Mutex::new(Publisher::new(&paths));
+
+    // Anything already known goes to the publisher before the walk starts, so
+    // a target enclosing one of them still settles correctly.
+    let known: Vec<bool> = targets
+        .iter()
+        .map(|target| cache::size_of(&target.path, target.kind).is_some())
+        .collect();
+    for (index, target) in targets.iter().enumerate() {
+        let Some(bytes) = cache::size_of(&target.path, target.kind) else { continue };
+        let settled = publisher.lock().unwrap().record(index, bytes);
+        for (index, bytes) in settled {
+            on_size(SizedTarget { index, bytes });
+        }
+    }
+
+    let walk = Walk::new(&paths, &known);
+    let remember = |sized: SizedTarget| {
+        if let Some(target) = targets.get(sized.index) {
+            cache::put_size(&target.path, target.kind, sized.bytes);
+        }
+        on_size(sized);
+    };
     std::thread::scope(|scope| {
-        for _ in 0..WORKERS {
-            scope.spawn(|| walk.run(&paths, &publisher, &on_size));
+        for _ in 0..crate::qos::workers() {
+            scope.spawn(|| {
+                // Housekeeping: never take the disk away from a build.
+                crate::qos::background();
+                walk.run(&paths, &publisher, &remember);
+            });
         }
     });
 }

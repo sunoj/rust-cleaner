@@ -111,6 +111,7 @@ fn title(group: ArtifactGroup) -> &'static str {
         ArtifactGroup::NodeModules => "NODE MODULES",
         ArtifactGroup::BuildOutput => "BUILD OUTPUT",
         ArtifactGroup::Caches => "CACHES",
+        ArtifactGroup::Toolchains => "RUST TOOLCHAINS",
     }
 }
 

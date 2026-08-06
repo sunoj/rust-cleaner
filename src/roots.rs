@@ -75,6 +75,15 @@ pub(crate) fn collect_shared_cargo_target(found: &mut Vec<TargetDir>) {
     }
 }
 
+/// Collect the Rust toolchains a scan may offer. Which ones those are is
+/// rustup's business, not a path pattern's, so the decision lives in
+/// `toolchains` and this only turns the answer into rows.
+pub(crate) fn collect_toolchains(found: &mut Vec<TargetDir>, scan_dirs: &[PathBuf], max_depth: usize) {
+    for path in crate::toolchains::removable(scan_dirs, max_depth) {
+        push_dir(found, path, ArtifactKind::Toolchain);
+    }
+}
+
 pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
     let Some(home) = dirs::home_dir() else { return };
     for path in [
@@ -95,6 +104,15 @@ pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
     ] {
         if path.is_dir() && !path.is_symlink() {
             push_dir(found, path, ArtifactKind::Cache);
+        }
+    }
+
+    // Cargo's downloads: the .crate tarballs, the sources unpacked from them and
+    // the registry index. All of it comes back on the next build, so it goes in
+    // whole rather than by part — but from CARGO_HOME, which can be moved.
+    if let Some(registry) = crate::toolchains::cargo_home().map(|home| home.join("registry")) {
+        if registry.is_dir() && !registry.is_symlink() {
+            push_dir(found, registry, ArtifactKind::Cache);
         }
     }
 

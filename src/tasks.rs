@@ -24,7 +24,12 @@ use wd40::discover::scan_discover;
 use wd40::scanner::TargetDir;
 use wd40::sizes::size_targets;
 
-const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
+/// How often the app rescans on its own, in seconds. Ten minutes rather than
+/// five: nothing on screen goes stale enough in that time to be worth waking
+/// the disk for, and the figures that cost the most to measure do not change
+/// at all between two of them.
+const AUTO_SCAN_INTERVAL: f64 = 10.0 * 60.0;
+
 /// A clean that takes a moment is worth watching, and one that takes none at
 /// all used to flash past before anything could be read. The floor is on the
 /// screen alone: removal starts the instant it is asked for, nothing waits on
@@ -36,6 +41,7 @@ static SCANNING: AtomicBool = AtomicBool::new(false);
 static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
+static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
 /// The finished summary, waiting for the cleaning screen to have been up long
 /// enough to have been read.
@@ -144,11 +150,51 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     // point at which rows are allowed to move.
     with_state(|state| state.finish_sizing());
     popover::refresh(mtm);
+    start_reclaim();
     #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
     if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
         spawn_clean_selected();
     }
+}
+
+/// Work out what the targets really occupy on the device. One `open` per file
+/// over every target is 71 s on this Mac, so it runs after the sizes are on
+/// screen rather than before, at background priority, and the totals use summed
+/// sizes until it lands.
+///
+/// It is also skipped outright when nothing has moved. An automatic rescan every
+/// ten minutes usually finds the same directories at the same sizes, and reading
+/// four hundred thousand files again to reach the same answer is the kind of
+/// work a menu bar app has no business doing.
+fn start_reclaim() {
+    let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
+    if targets.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        // `measure` answers from the two-level store when the same directories
+        // come back at the same sizes, so this is free far more often than it
+        // is expensive — including on the first scan after a restart.
+        *RECLAIM_RESULT.lock().unwrap() = wd40::reclaim::Reclaim::measure(&targets);
+        wd40::cache::flush();
+        dispatch_to_main(crate::mainthread::reclaim_done_trampoline);
+    });
+}
+
+/// The accounting is in: totals stop being a sum and start being a promise.
+pub fn on_reclaim_done(mtm: MainThreadMarker) {
+    let Some(found) = RECLAIM_RESULT.lock().unwrap().take() else { return };
+    with_state(|state| {
+        // Printed because the difference between these two numbers is the whole
+        // point of the pass, and a run where it never lands looks from outside
+        // exactly like one where the disk really does hold that much.
+        let summed = wd40::scanner::human_size(state.total_size());
+        state.reclaim = Some(found);
+        println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
+    });
+    popover::refresh(mtm);
+    popover::refresh_status(mtm);
 }
 
 /// Clean exactly the checked items. Irreversible; nothing else is touched.

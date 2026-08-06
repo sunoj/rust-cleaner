@@ -221,6 +221,11 @@ define_class!(
             tasks::on_sizes_tick(self.mtm());
         }
 
+        #[unsafe(method(reclaimDone:))]
+        fn reclaim_done(&self, _sender: *mut AnyObject) {
+            tasks::on_reclaim_done(self.mtm());
+        }
+
         #[unsafe(method(sizesDone:))]
         fn sizes_done(&self, _sender: *mut AnyObject) {
             tasks::on_sizes_done(self.mtm());
@@ -262,6 +267,9 @@ fn main() {
     }
 
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+    // Level two first: the scan that starts a moment from now is the one it
+    // exists to spare.
+    wd40::cache::load();
     let config = Config::load();
     let auto_hours = config.auto_clean_hours;
 
@@ -277,6 +285,7 @@ fn main() {
         done: None,
         status_item,
         updater: Updater::start(),
+        reclaim: None,
     });
 
     popover::attach(mtm);
