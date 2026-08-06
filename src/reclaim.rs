@@ -1,24 +1,14 @@
 // What a selection is actually worth, in device bytes rather than in summed
-// allocated sizes. Only the targets that can share blocks are read through the
-// extent map — everything else occupies exactly what it says it does, and
-// paying 9x to confirm that would be waste.
+// allocated sizes. Every target goes through the extent map together: sharing
+// is a relation between two directories, and one read in isolation cannot tell
+// whether the blocks it holds are its own.
 // Exports: `Reclaim`.
 // Deps: std, crate::{extents, scanner}.
 
 use crate::extents::{attribute, Attribution};
 use crate::scanner::TargetDir;
-use std::path::Path;
 
-/// A directory seeded by `cp -Rc` shares blocks with whatever it was cloned
-/// from. `aid` does that for every session target under this root, and nothing
-/// else on the disk is built that way.
-fn can_share(path: &Path) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == ".cargo-target")
-}
-
-/// Device-byte accounting for the targets that can overlap, alongside the
-/// summed sizes of the ones that cannot.
+/// Device-byte accounting across the whole target list.
 pub struct Reclaim {
     /// Target index behind each owner in `attribution`, in owner order.
     owners: Vec<usize>,
@@ -26,20 +16,25 @@ pub struct Reclaim {
 }
 
 impl Reclaim {
-    /// Read the extent maps of every target that can share blocks. `None` when
-    /// none can, which is the common case and costs nothing to find out.
+    /// Read the extent maps of every target.
+    ///
+    /// Every target, not the ones a path pattern calls clone-prone: `aid`
+    /// clones *from* a project's own target directory *into* a session one, so
+    /// one end of the sharing is an ordinary `target/` and the other is under
+    /// `.cargo-target` or in /tmp. Leaving either end out does not merely miss
+    /// the saving — it makes the number wrong in the dangerous direction, by
+    /// crediting a selection with blocks a copy outside the set still holds.
+    ///
+    /// Measured on this Mac: reading only `.cargo-target` reported 61.78 G
+    /// against a true 33.52 G, because the largest clone tree of all was a
+    /// 40 G directory in /tmp.
     pub fn measure(targets: &[TargetDir]) -> Option<Self> {
-        let owners: Vec<usize> = targets
-            .iter()
-            .enumerate()
-            .filter(|(_, target)| can_share(&target.path))
-            .map(|(index, _)| index)
-            .collect();
-        if owners.is_empty() {
+        if targets.is_empty() {
             return None;
         }
+        let owners: Vec<usize> = (0..targets.len()).collect();
         let paths: Vec<std::path::PathBuf> =
-            owners.iter().map(|index| targets[*index].path.clone()).collect();
+            targets.iter().map(|target| target.path.clone()).collect();
         Some(Self { owners, attribution: attribute(&paths) })
     }
 
@@ -63,68 +58,72 @@ impl Reclaim {
             .fold(shared, u64::saturating_add)
     }
 
-    /// True once the targets it was measured against are no longer the ones on
-    /// screen, so a stale accounting is dropped rather than believed.
+    /// What the whole list occupies on the device.
+    pub fn total_of(&self, targets: &[TargetDir]) -> u64 {
+        self.bytes(targets, &|_| true)
+    }
+
+    /// True while this accounting still describes the rows on screen. A rescan
+    /// that added or dropped a target invalidates the owner indices, and a
+    /// stale promise is worse than a conservative one.
     pub fn covers(&self, targets: &[TargetDir]) -> bool {
-        self.owners.iter().all(|index| {
-            targets.get(*index).is_some_and(|target| can_share(&target.path))
-        })
+        self.owners.len() == targets.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{can_share, Reclaim};
+    use super::Reclaim;
     use crate::scanner::{ArtifactKind, TargetDir};
     use std::collections::HashSet;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::SystemTime;
 
-    fn target(path: &str, size_bytes: u64) -> TargetDir {
-        TargetDir {
-            path: PathBuf::from(path),
-            size_bytes,
-            last_modified: SystemTime::UNIX_EPOCH,
-            kind: ArtifactKind::RustTarget,
+    fn target(path: PathBuf, size_bytes: u64) -> TargetDir {
+        TargetDir { path, size_bytes, last_modified: SystemTime::UNIX_EPOCH, kind: ArtifactKind::RustTarget }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("wd40-reclaim-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        path
+    }
+
+    #[test]
+    fn an_empty_list_needs_no_accounting() {
+        assert!(Reclaim::measure(&[]).is_none());
+    }
+
+    /// The red line, and the bug this replaced: a clone in /tmp is as much a
+    /// clone as one under `.cargo-target`. Nothing about where a directory sits
+    /// may decide whether its blocks are counted.
+    #[test]
+    fn sharing_is_found_wherever_the_directories_sit() {
+        let root = scratch("anywhere");
+        let source = root.join("Develop/proj/target");
+        let session = root.join("tmp/cc-target-session");
+        let _ = std::fs::create_dir_all(&source);
+        let _ = std::fs::create_dir_all(&session);
+        let payload = source.join("payload.bin");
+        let _ = std::fs::write(&payload, vec![b'x'; 4 << 20]);
+        let cloned = std::process::Command::new("cp")
+            .arg("-c").arg(&payload).arg(session.join("payload.bin")).status();
+        if !cloned.is_ok_and(|status| status.success()) {
+            eprintln!("skipped: cp -c unavailable");
+            return;
         }
-    }
 
-    #[test]
-    fn only_the_clone_seeded_root_can_share() {
-        assert!(can_share(Path::new("/Users/x/.cargo-target/proj/session-a")));
-        assert!(!can_share(Path::new("/Users/x/Develop/proj/target")));
-        assert!(!can_share(Path::new("/Users/x/.rustup/toolchains/stable-x")));
-    }
+        let targets = vec![target(source, 4 << 20), target(session, 4 << 20)];
+        let found = Reclaim::measure(&targets).expect("two targets");
 
-    /// Nothing that can share means nothing to read off the device.
-    #[test]
-    fn a_scan_with_no_clone_root_needs_no_accounting() {
-        let targets = vec![target("/Users/x/Develop/a/target", 10), target("/Users/x/b/target", 20)];
-        assert!(Reclaim::measure(&targets).is_none());
-    }
+        let four_mb = (4 << 20) as u64;
+        assert!(found.total_of(&targets) < four_mb * 2, "the clone is not a second copy");
 
-    /// The ordinary targets keep contributing their own figures, so switching
-    /// the accounting on never makes a selection worth less than its parts that
-    /// share nothing.
-    #[test]
-    fn targets_that_share_nothing_still_count_in_full() {
-        let root = std::env::temp_dir().join(format!("wd40-reclaim-{}", std::process::id()));
-        let shared = root.join(".cargo-target/proj");
-        let _ = std::fs::create_dir_all(&shared);
-        let _ = std::fs::write(shared.join("payload.bin"), vec![b'x'; 1 << 20]);
-
-        let targets = vec![
-            target(shared.to_str().unwrap(), 1 << 20),
-            target("/Users/x/Develop/plain/target", 4096),
-        ];
-        let found = Reclaim::measure(&targets).expect("one root can share");
-
-        let picked: HashSet<usize> = [1].into_iter().collect();
-        let only_plain = found.bytes(&targets, &|index| picked.contains(&index));
-        assert_eq!(only_plain, 4096, "a target outside the accounting counts in full");
-
-        let none = found.bytes(&targets, &|_| false);
-        assert_eq!(none, 0, "selecting nothing is worth nothing");
+        // Neither one alone frees anything the other still holds.
+        let only_session: HashSet<usize> = [1].into_iter().collect();
+        assert_eq!(found.bytes(&targets, &|index| only_session.contains(&index)), 0);
+        // Both together free what they share.
+        assert!(found.bytes(&targets, &|_| true) >= four_mb);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

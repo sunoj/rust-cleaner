@@ -42,6 +42,8 @@ static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
+/// The target list the last finished accounting was made from.
+static LAST_RECLAIM: Mutex<Option<Vec<(std::path::PathBuf, u64)>>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
 /// The finished summary, waiting for the cleaning screen to have been up long
 /// enough to have been read.
@@ -158,18 +160,42 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     }
 }
 
-/// Work out what the clone-seeded targets really occupy on the device. Costs
-/// one `open` per file, so it runs after the sizes are on screen rather than
-/// before, and the totals use summed sizes until it lands.
+/// Work out what the targets really occupy on the device. One `open` per file
+/// over every target is 71 s on this Mac, so it runs after the sizes are on
+/// screen rather than before, at background priority, and the totals use summed
+/// sizes until it lands.
+///
+/// It is also skipped outright when nothing has moved. An automatic rescan every
+/// ten minutes usually finds the same directories at the same sizes, and reading
+/// four hundred thousand files again to reach the same answer is the kind of
+/// work a menu bar app has no business doing.
 fn start_reclaim() {
     let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
     if targets.is_empty() {
         return;
     }
+    let fingerprint = reclaim_fingerprint(&targets);
+    if *LAST_RECLAIM.lock().unwrap() == Some(fingerprint.clone()) {
+        return;
+    }
     std::thread::spawn(move || {
-        *RECLAIM_RESULT.lock().unwrap() = wd40::reclaim::Reclaim::measure(&targets);
+        let found = wd40::reclaim::Reclaim::measure(&targets);
+        // Recorded only once the pass is through, so a run that dies leaves the
+        // next scan to try again rather than skipping for ever.
+        *LAST_RECLAIM.lock().unwrap() = found.is_some().then_some(fingerprint);
+        *RECLAIM_RESULT.lock().unwrap() = found;
         dispatch_to_main(crate::mainthread::reclaim_done_trampoline);
     });
+}
+
+/// What the accounting depends on: which directories, and how big each is. A
+/// build that changed a target's size changes this; a rescan that found the
+/// same thing twice does not.
+fn reclaim_fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
+    targets
+        .iter()
+        .map(|target| (target.path.clone(), target.size_bytes))
+        .collect()
 }
 
 /// The accounting is in: totals stop being a sum and start being a promise.
