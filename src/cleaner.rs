@@ -1,11 +1,12 @@
 // Removal for WD-40. Deleting here is irreversible and skips the Trash, so a
 // run reports exactly what left the disk: gone, partly gone, or untouched — a
 // removal that failed half way is never counted as done.
-// Exports: `Removal`, `remove_target`, `remove_targets`, `clean_all`, `clean_old`.
+// Exports: removals, cleaning operations, and verified-age lookup.
 // Deps: std, crate::{scanner, sizes}.
 
 use crate::scanner::{ArtifactKind, TargetDir};
 use crate::sizes::measure_dir;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -137,13 +138,23 @@ pub fn clean_all(targets: &[TargetDir]) -> CleanResult {
     result.into_inner().unwrap_or_default()
 }
 
-pub fn clean_old(targets: &[TargetDir], max_age: Duration) -> CleanResult {
+pub fn verified_age(
+    target: &TargetDir,
+    measured_ages: &HashMap<PathBuf, SystemTime>,
+    now: SystemTime,
+) -> Option<Duration> {
+    now.duration_since(*measured_ages.get(&target.path)?).ok()
+}
+
+pub fn clean_old(
+    targets: &[TargetDir],
+    measured_ages: &HashMap<PathBuf, SystemTime>,
+    max_age: Duration,
+) -> CleanResult {
     let now = SystemTime::now();
     let old: Vec<TargetDir> = targets
         .iter()
-        .filter(|target| {
-            now.duration_since(target.last_modified).unwrap_or(Duration::ZERO) >= max_age
-        })
+        .filter(|target| verified_age(target, measured_ages, now).is_some_and(|age| age >= max_age))
         .cloned()
         .collect();
     clean_all(&old)
@@ -156,7 +167,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::SystemTime;
-
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("wd40-clean-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
