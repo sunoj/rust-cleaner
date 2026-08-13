@@ -142,9 +142,9 @@ define_class!(
             actions::open_settings(self.mtm());
         }
 
-        #[unsafe(method(settingsCycleInterval:))]
-        fn settings_cycle_interval(&self, _sender: &AnyObject) {
-            actions::cycle_interval(self.mtm());
+        #[unsafe(method(settingsInterval:))]
+        fn settings_interval(&self, sender: &NSButton) {
+            actions::interval(sender, self.mtm());
         }
 
         #[unsafe(method(settingsSetMaxAge:))]
@@ -153,9 +153,9 @@ define_class!(
             actions::set_max_age(days, self.mtm());
         }
 
-        #[unsafe(method(settingsCycleDepth:))]
-        fn settings_cycle_depth(&self, _sender: &AnyObject) {
-            actions::cycle_depth(self.mtm());
+        #[unsafe(method(settingsDepth:))]
+        fn settings_depth(&self, sender: &NSButton) {
+            actions::depth(sender, self.mtm());
         }
 
         #[unsafe(method(settingsToggleGroup:))]

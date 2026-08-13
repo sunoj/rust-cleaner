@@ -38,6 +38,7 @@ pub fn show_more(mtm: MainThreadMarker) {
 /// screen change starts at the top rather than at the other screen's offset.
 pub fn open_settings(mtm: MainThreadMarker) {
     crate::scrolling::reset_scroll();
+    settings_view::collapse_disclosure();
     with_state(|state| state.screen = UiScreen::Settings);
     popover::refresh(mtm);
 }
@@ -47,28 +48,27 @@ pub fn open_settings(mtm: MainThreadMarker) {
 /// had already made before they came in.
 pub fn close_settings(mtm: MainThreadMarker) {
     crate::scrolling::reset_scroll();
+    settings_view::collapse_disclosure();
     with_state(|state| state.screen = UiScreen::Scan);
     popover::refresh(mtm);
 }
 
-pub fn cycle_interval(mtm: MainThreadMarker) {
-    let hours = with_state_ret_hours();
-    if hours > 0 {
-        tasks::start_auto_clean(hours);
+pub fn interval(sender: &NSButton, mtm: MainThreadMarker) {
+    if let Some(hours) = settings_view::interval_for_tag(sender.tag()) {
+        with_state(|state| {
+            state.config.auto_clean_hours = hours;
+            state.config.save();
+        });
+        if hours > 0 {
+            tasks::start_auto_clean(hours);
+        } else {
+            tasks::stop_auto_clean();
+        }
+        settings_view::collapse_disclosure();
     } else {
-        tasks::stop_auto_clean();
+        settings_view::toggle_disclosure(settings_view::SettingsDisclosure::AutoClean);
     }
     popover::refresh(mtm);
-}
-
-fn with_state_ret_hours() -> u64 {
-    let mut hours = 0;
-    with_state(|state| {
-        state.config.auto_clean_hours = settings_view::next_interval(state.config.auto_clean_hours);
-        state.config.save();
-        hours = state.config.auto_clean_hours;
-    });
-    hours
 }
 
 pub fn set_max_age(days: u64, mtm: MainThreadMarker) {
@@ -80,11 +80,17 @@ pub fn set_max_age(days: u64, mtm: MainThreadMarker) {
     popover::refresh(mtm);
 }
 
-pub fn cycle_depth(mtm: MainThreadMarker) {
+pub fn depth(sender: &NSButton, mtm: MainThreadMarker) {
+    let Some(depth) = settings_view::depth_for_tag(sender.tag()) else {
+        settings_view::toggle_disclosure(settings_view::SettingsDisclosure::ScanDepth);
+        popover::refresh(mtm);
+        return;
+    };
     with_state(|state| {
-        state.config.max_depth = settings_view::next_depth(state.config.max_depth);
+        state.config.max_depth = depth;
         state.config.save();
     });
+    settings_view::collapse_disclosure();
     popover::refresh(mtm);
     tasks::start_scan(false);
 }
@@ -172,4 +178,24 @@ pub fn show_alert(mtm: MainThreadMarker, title: &str, body: &str) {
     #[allow(deprecated)]
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
     alert.runModal();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disclosures_are_exclusive_and_only_choice_tags_are_accepted() {
+        settings_view::collapse_disclosure();
+        settings_view::toggle_disclosure(settings_view::SettingsDisclosure::AutoClean);
+        assert_eq!(settings_view::active_disclosure(), Some(settings_view::SettingsDisclosure::AutoClean));
+        settings_view::toggle_disclosure(settings_view::SettingsDisclosure::ScanDepth);
+        assert_eq!(settings_view::active_disclosure(), Some(settings_view::SettingsDisclosure::ScanDepth));
+        settings_view::toggle_disclosure(settings_view::SettingsDisclosure::ScanDepth);
+        assert_eq!(settings_view::active_disclosure(), None);
+        assert_eq!(settings_view::interval_for_tag(settings_view::TAG_INTERVAL_BASE + 12), Some(12));
+        assert_eq!(settings_view::interval_for_tag(12), None);
+        assert_eq!(settings_view::depth_for_tag(settings_view::TAG_DEPTH_BASE + 5), Some(5));
+        assert_eq!(settings_view::depth_for_tag(5), None);
+    }
 }

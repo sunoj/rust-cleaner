@@ -1,11 +1,14 @@
 // Settings screen inside the 380pt popover: what is scanned, what is kept, and
 // where the app looks. Every control here changes something the scan does.
-// Exports: `build`, `next_interval`, `next_depth`, `TAG_GROUP_BASE`, `TAG_ROOT_BASE`.
+// Exports: `build`, disclosure state/actions, choice tag decoders, and row tags.
 // Deps: crate::{controls, header, scrolling, settings_row, state, theme, widgets}.
 
 use crate::controls::{days_slider, set_cmd_key, text_button};
 use crate::header::scan_size;
-use crate::settings_row::{divider, group_row, section, switch_row, value_row, GroupSpec, Spec};
+use crate::settings_row::{
+    choice_list_height, disclosure_row, divider, group_row, section, switch_row, value_row,
+    ChoiceSpec, GroupSpec, Spec,
+};
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::widgets::{
@@ -16,11 +19,14 @@ use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2_app_kit::NSView;
 use objc2_foundation::{MainThreadMarker, NSPoint};
+use std::cell::Cell;
 use wd40::scanner::ArtifactGroup;
 
 /// Base tags for the two kinds of row an action has to identify.
 pub const TAG_GROUP_BASE: isize = 2200;
 pub const TAG_ROOT_BASE: isize = 2300;
+pub(crate) const TAG_INTERVAL_BASE: isize = 2400;
+pub(crate) const TAG_DEPTH_BASE: isize = 2500;
 
 const MAX_HEIGHT: f64 = 540.0;
 const BRAND_H: f64 = 56.0;
@@ -29,7 +35,15 @@ const FOOTER_H: f64 = 44.0;
 /// the drawing rather than predicted by a second copy of the layout.
 const SHEET_H: f64 = 1400.0;
 
-const INTERVALS: &[(u64, &str)] = &[(0, "Off"), (1, "1h"), (6, "6h"), (12, "12h"), (24, "1d")];
+const INTERVALS: [(u64, &str); 5] = [(0, "Off"), (1, "1h"), (6, "6h"), (12, "12h"), (24, "1d")];
+const DEPTHS: [(usize, &str); 4] = [(3, "3 levels"), (4, "4 levels"), (5, "5 levels"), (6, "6 levels")];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsDisclosure { AutoClean, ScanDepth }
+
+thread_local! {
+    static OPEN_DISCLOSURE: Cell<Option<SettingsDisclosure>> = const { Cell::new(None) };
+}
 
 pub fn build(
     state: &AppState,
@@ -40,7 +54,8 @@ pub fn build(
     let sheet = widgets::root_view(SHEET_H, theme.surface, mtm);
     let used = SHEET_H - draw_body(&sheet, SHEET_H, state, theme, target, mtm);
 
-    let body_h = used.min(MAX_HEIGHT - BRAND_H - FOOTER_H);
+    let body_limit = MAX_HEIGHT - BRAND_H - FOOTER_H + disclosure_height();
+    let body_h = used.min(body_limit);
     let height = BRAND_H + body_h + FOOTER_H;
     let root = widgets::root_view(height, theme.surface, mtm);
     draw_brand(&root, height, theme, mtm);
@@ -83,20 +98,34 @@ fn draw_scanning(
     mtm: MainThreadMarker,
 ) -> f64 {
     y = section(parent, y, "SCANNING", theme, mtm);
-    y = value_row(
+    let open = open_disclosure();
+    let interval_choices = INTERVALS.map(|(hours, title)| ChoiceSpec {
+        title,
+        selected: state.config.auto_clean_hours == hours,
+        action: sel!(settingsInterval:),
+        tag: TAG_INTERVAL_BASE + hours as isize,
+    });
+    y = disclosure_row(
         parent, y,
-        &Spec { title: "Auto clean", hint: None, action: sel!(settingsCycleInterval:) },
-        Some(interval_label(state.config.auto_clean_hours)), theme, target, mtm,
+        &Spec { title: "Auto clean", hint: None, action: sel!(settingsInterval:) },
+        interval_label(state.config.auto_clean_hours), open == Some(SettingsDisclosure::AutoClean),
+        &interval_choices, theme, target, mtm,
     );
     let depth = format!("{} levels", state.config.max_depth);
-    y = value_row(
+    let depth_choices = DEPTHS.map(|(depth, title)| ChoiceSpec {
+        title,
+        selected: state.config.max_depth == depth,
+        action: sel!(settingsDepth:),
+        tag: TAG_DEPTH_BASE + depth as isize,
+    });
+    y = disclosure_row(
         parent, y,
         &Spec {
             title: "Scan depth",
             hint: Some("How far below each root to look"),
-            action: sel!(settingsCycleDepth:),
+            action: sel!(settingsDepth:),
         },
-        Some(&depth), theme, target, mtm,
+        &depth, open == Some(SettingsDisclosure::ScanDepth), &depth_choices, theme, target, mtm,
     );
     switch_row(
         parent, y,
@@ -234,17 +263,32 @@ fn interval_label(hours: u64) -> &'static str {
     INTERVALS.iter().find(|(h, _)| *h == hours).map(|(_, l)| *l).unwrap_or("custom")
 }
 
-pub fn next_interval(current: u64) -> u64 {
-    let idx = INTERVALS.iter().position(|(h, _)| *h == current).unwrap_or(0);
-    INTERVALS[(idx + 1) % INTERVALS.len()].0
+pub fn toggle_disclosure(disclosure: SettingsDisclosure) {
+    OPEN_DISCLOSURE.with(|open| {
+        let next = (open.get() != Some(disclosure)).then_some(disclosure);
+        open.set(next);
+    });
 }
 
-pub fn next_depth(current: usize) -> usize {
-    match current {
-        0..=2 => 3,
-        3 => 4,
-        4 => 5,
-        5 => 6,
-        _ => 3,
+pub fn collapse_disclosure() { OPEN_DISCLOSURE.set(None); }
+
+pub fn interval_for_tag(tag: isize) -> Option<u64> {
+    INTERVALS.iter().find(|(hours, _)| TAG_INTERVAL_BASE + *hours as isize == tag).map(|&(hours, _)| hours)
+}
+
+pub fn depth_for_tag(tag: isize) -> Option<usize> {
+    DEPTHS.iter().find(|(depth, _)| TAG_DEPTH_BASE + *depth as isize == tag).map(|&(depth, _)| depth)
+}
+
+fn open_disclosure() -> Option<SettingsDisclosure> { OPEN_DISCLOSURE.get() }
+
+fn disclosure_height() -> f64 {
+    match open_disclosure() {
+        Some(SettingsDisclosure::AutoClean) => choice_list_height(INTERVALS.len()),
+        Some(SettingsDisclosure::ScanDepth) => choice_list_height(DEPTHS.len()),
+        None => 0.0,
     }
 }
+
+#[cfg(test)]
+pub fn active_disclosure() -> Option<SettingsDisclosure> { open_disclosure() }
