@@ -117,6 +117,7 @@ pub fn clear() {
 /// False means there is no live scan screen to patch and the caller should
 /// rebuild instead.
 pub fn sizes_arrived(arrived: &[usize], mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("sizes_arrived").extra(format!("n={}", arrived.len()));
     patch(UiScreen::Scan, |state, target| {
         SCAN.with(|cell| {
             let held = cell.borrow();
@@ -143,14 +144,26 @@ pub fn sizes_arrived(arrived: &[usize], mtm: MainThreadMarker) -> bool {
                     state.group_settled(group.group),
                 );
             }
-            redraw_scan_frame(scan, state, target, mtm);
+            // The footer stays on "Measuring" until every size is in. Rebuilding
+            // it on each hop is the same button, and it is the expensive half.
+            if state.sizing() {
+                redraw_scan_header(scan, state, mtm);
+            } else {
+                redraw_scan_frame(scan, state, target, mtm);
+            }
             true
         })
     })
 }
 
+/// True when the scan list is live and a patch can land on it.
+pub fn has_scan() -> bool {
+    SCAN.with(|cell| cell.borrow().is_some())
+}
+
 /// A row or group was ticked: the boxes and the button, and nothing else.
 pub fn selection_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("selection_changed");
     patch(UiScreen::Scan, |state, target| {
         SCAN.with(|cell| {
             let held = cell.borrow();
@@ -168,6 +181,19 @@ pub fn selection_changed(mtm: MainThreadMarker) -> bool {
             }
             scan.footer.clear();
             crate::scan_view::draw_footer(scan.footer.view(), state, &scan.theme, target, mtm);
+            true
+        })
+    })
+}
+
+/// Reclaim or a header figure landed. Rows stay put; only the chrome is redrawn.
+pub fn totals_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("totals_changed");
+    patch(UiScreen::Scan, |state, target| {
+        SCAN.with(|cell| {
+            let held = cell.borrow();
+            let Some(scan) = held.as_ref() else { return false };
+            redraw_scan_frame(scan, state, target, mtm);
             true
         })
     })
@@ -212,7 +238,7 @@ fn largest(state: &AppState) -> u64 {
         .max(1)
 }
 
-fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
+fn redraw_scan_header(scan: &Scan, state: &AppState, mtm: MainThreadMarker) {
     scan.header.clear();
     crate::header::draw_scan_header(
         scan.header.view(),
@@ -221,6 +247,10 @@ fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: Mai
         &scan.theme,
         mtm,
     );
+}
+
+fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
+    redraw_scan_header(scan, state, mtm);
     scan.footer.clear();
     crate::scan_view::draw_footer(scan.footer.view(), state, &scan.theme, target, mtm);
 }

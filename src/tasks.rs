@@ -72,6 +72,9 @@ pub fn stop_requested() -> bool {
 }
 
 pub fn start_scan(then_clean: bool) {
+    if crate::trace::active() {
+        return;
+    }
     let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
     if SCANNING.swap(true, Ordering::Relaxed) {
         return;
@@ -80,12 +83,18 @@ pub fn start_scan(then_clean: bool) {
         POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
     }
     if let Some(mtm) = MainThreadMarker::new() {
-        with_state(|state| {
-            if state.screen == UiScreen::Done {
+        let left_done = with_state_ret(|state| {
+            let was = state.screen == UiScreen::Done;
+            if was {
                 state.screen = UiScreen::Scan;
             }
-        });
-        popover::refresh(mtm);
+            was
+        })
+        .unwrap_or(false);
+        // Only Done has to change now; on_scan_done rebuilds the list.
+        if left_done {
+            popover::refresh(mtm);
+        }
     }
     std::thread::spawn(move || {
         *SCAN_RESULT.lock().unwrap() = Some(scan_discover(&config));
@@ -193,7 +202,9 @@ pub fn on_reclaim_done(mtm: MainThreadMarker) {
         state.reclaim = Some(found);
         println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
     });
-    popover::refresh(mtm);
+    if !live::totals_changed(mtm) {
+        popover::refresh(mtm);
+    }
     popover::refresh_status(mtm);
 }
 

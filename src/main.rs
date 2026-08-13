@@ -44,6 +44,7 @@ mod style;
 mod tasks;
 mod tasks_clean;
 mod theme;
+mod trace;
 mod treemap;
 mod updater;
 mod widgets;
