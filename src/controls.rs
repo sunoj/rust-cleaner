@@ -1,162 +1,252 @@
-// AppKit control primitives for the Settings window: build them, then read
-// them back by tag. Geometry is passed in; layout decisions live in the caller.
-// Exports: `add_label`, `add_checkbox_at`, `add_button`, `add_popup`, accessors.
-// Deps: objc2, objc2_app_kit, objc2_foundation.
+// Interactive AppKit controls for the popover (buttons, checkbox, pill, slider).
+// Exports: button/checkbox/switch/slider helpers used by views.
+// Deps: crate::{theme, widgets}, objc2 AppKit.
 
+use crate::style::attributed;
+use crate::theme::Theme;
+use crate::widgets::{add_fill, fitted_width};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
-    NSBezelStyle, NSButton, NSButtonType, NSColor, NSControlStateValueOff, NSControlStateValueOn,
-    NSFont, NSPopUpButton, NSTextField, NSView,
+    NSButton, NSColor, NSEventModifierFlags, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSSlider, NSUnderlineStyleAttributeName,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
-
-
-pub fn add_label(root: &NSView, text: &str, x: f64, y: f64, width: f64, secondary: bool, mtm: MainThreadMarker) {
-    let label = label_field(text, x, y, width, secondary, mtm);
-    root.addSubview(&label);
-}
-
-pub fn label_field(text: &str, x: f64, y: f64, width: f64, secondary: bool, mtm: MainThreadMarker) -> Retained<NSTextField> {
-    let field = {
-        NSTextField::initWithFrame(
-            NSTextField::alloc(mtm),
-            NSRect::new(NSPoint::new(x, y), NSSize::new(width, 18.0)),
-        )
-    };
-    field.setStringValue(&NSString::from_str(text));
-    field.setBezeled(false);
-    field.setDrawsBackground(false);
-    field.setEditable(false);
-    field.setSelectable(false);
-    if secondary {
-        field.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-        field.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    }
-    field
-}
+use objc2_foundation::{
+    MainThreadMarker, NSAttributedString, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString,
+};
 
 #[allow(clippy::too_many_arguments)]
-pub fn add_checkbox_at(root: &NSView, title: &str, tag: isize, on: bool, action: Sel, target: &AnyObject, x: f64, y: f64, width: f64, mtm: MainThreadMarker) {
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(&NSString::from_str(title), Some(target), Some(action), mtm)
-    };
-    button.setButtonType(NSButtonType::Switch);
-    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, 22.0)));
-    button.setTag(tag);
-    button.setState(if on { NSControlStateValueOn } else { NSControlStateValueOff });
-    root.addSubview(&button);
-}
-
-pub fn add_button(root: &NSView, title: &str, action: Sel, target: &AnyObject, x: f64, y: f64, mtm: MainThreadMarker) {
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(&NSString::from_str(title), Some(target), Some(action), mtm)
-    };
-    button.setBezelStyle(NSBezelStyle::Push);
-    button.setFrame(NSRect::new(NSPoint::new(x, y - 2.0), NSSize::new(120.0, 26.0)));
-    root.addSubview(&button);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn add_popup(
-    root: &NSView,
+pub fn text_button(
+    parent: &objc2_app_kit::NSView,
     title: &str,
-    tag: isize,
-    options: &[(u64, &str)],
-    active: u64,
-    action: Sel,
-    target: &AnyObject,
     x: f64,
     y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    color: (f64, f64, f64),
     mtm: MainThreadMarker,
-) {
-    add_label(root, title, x, y + 3.0, 130.0, false, mtm);
-    let popup = {
-        NSPopUpButton::initWithFrame_pullsDown(
-            NSPopUpButton::alloc(mtm),
-            NSRect::new(NSPoint::new(x + 140.0, y), NSSize::new(180.0, 25.0)),
-            false,
+) -> Retained<NSButton> {
+    let button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(title),
+            Some(target),
+            Some(action),
+            mtm,
         )
     };
-    for &(value, label) in options {
-        popup.addItemWithTitle(&NSString::from_str(label));
-        if let Some(item) = popup.lastItem() {
-            item.setTag(value as isize);
+    button.setBordered(false);
+    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, 22.0)));
+    button.setTag(tag);
+    button.setAttributedTitle(&attributed(title, color, 12.5, false));
+    parent.addSubview(&button);
+    button
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn text_button_underlined(
+    parent: &objc2_app_kit::NSView,
+    title: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    color: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let button = text_button(parent, title, x, y, w, action, target, tag, color, mtm);
+    let font = NSFont::systemFontOfSize(12.5);
+    let tint = Theme::color(color);
+    let font_obj: &AnyObject = unsafe { &*(&*font as *const NSFont as *const AnyObject) };
+    let tint_obj: &AnyObject = unsafe { &*(&*tint as *const NSColor as *const AnyObject) };
+    let underline = NSNumber::numberWithDouble(1.0);
+    let underline_obj: &AnyObject = unsafe { &*(&*underline as *const NSNumber as *const AnyObject) };
+    let attrs = NSDictionary::<NSString, AnyObject>::from_slices::<NSString>(
+        &[unsafe { NSForegroundColorAttributeName }, unsafe { NSFontAttributeName }, unsafe { NSUnderlineStyleAttributeName }],
+        &[tint_obj, font_obj, underline_obj],
+    );
+    let title = unsafe { NSAttributedString::new_with_attributes(&NSString::from_str(title), &attrs) };
+    button.setAttributedTitle(&title);
+    button
+}
+
+/// Text button plus a faint ⌘ shortcut hint drawn beside it.
+#[allow(clippy::too_many_arguments)]
+pub fn text_button_hint(
+    parent: &objc2_app_kit::NSView,
+    title: &str,
+    hint: &str,
+    x: f64,
+    y: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    color: (f64, f64, f64),
+    hint_color: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let button = text_button(parent, title, x, y, 58.0, action, target, tag, color, mtm);
+    crate::widgets::label(parent, hint, x + 58.0, y + 2.0, 28.0, 16.0, 11.0, false, hint_color, true, mtm);
+    button
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn filled_button(
+    parent: &objc2_app_kit::NSView,
+    title: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    fill: (f64, f64, f64),
+    ink: (f64, f64, f64),
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    add_fill(parent, x, y, w, 34.0, fill, 1.0, 8.0, mtm);
+    let button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(title),
+            Some(target),
+            Some(action),
+            mtm,
+        )
+    };
+    button.setBordered(false);
+    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, 34.0)));
+    button.setTag(tag);
+    button.setAttributedTitle(&attributed(title, ink, 13.5, true));
+    parent.addSubview(&button);
+    button
+}
+
+/// What the clean button is entitled to say right now. Two of the three states
+/// have nothing to delete and no figure to quote, so they say neither.
+pub enum CleanCta {
+    /// Sizes are still arriving; nothing may be armed against numbers that are
+    /// still moving.
+    Measuring,
+    /// Nothing is ticked.
+    Empty,
+    Ready { count: usize, size: String },
+}
+
+impl CleanCta {
+    fn title(&self) -> String {
+        match self {
+            Self::Measuring => "Measuring\u{2026}".into(),
+            Self::Empty => "Tick what to clean".into(),
+            Self::Ready { count, .. } => format!("Clean {count} selected"),
         }
     }
-    popup.setTag(tag);
+
+    fn size(&self) -> Option<&str> {
+        match self {
+            Self::Ready { size, .. } => Some(size),
+            _ => None,
+        }
+    }
+
+    fn armed(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+}
+
+const CTA_H: f64 = 34.0;
+const GLYPH: f64 = 13.0;
+const AFTER_GLYPH: f64 = 8.0;
+const BEFORE_SIZE: f64 = 10.0;
+
+/// Trash glyph, title and total, centred as one cluster. Fixed offsets only
+/// looked centred for one title length, and every state here has a different one.
+#[allow(clippy::too_many_arguments)]
+pub fn clean_button(
+    parent: &objc2_app_kit::NSView,
+    cta: &CleanCta,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    theme: &Theme,
+    mtm: MainThreadMarker,
+) {
+    let armed = cta.armed();
+    add_fill(parent, x, y, w, CTA_H, theme.ink, if armed { 1.0 } else { 0.28 }, 8.0, mtm);
+    let title = cta.title();
+    let title_w = fitted_width(&title, 13.5, false, mtm);
+    let size_w = cta.size().map_or(0.0, |size| fitted_width(size, 12.5, true, mtm));
+    let lead = if armed { GLYPH + AFTER_GLYPH } else { 0.0 };
+    let trail = cta.size().map_or(0.0, |_| BEFORE_SIZE + size_w);
+    let mut cursor = x + ((w - (lead + title_w + trail)) / 2.0).max(0.0);
+    if armed {
+        crate::widgets::symbol_view(parent, "trash", cursor, y + 10.0, GLYPH, theme.surface, mtm);
+        cursor += lead;
+    }
+    crate::widgets::label(parent, &title, cursor, y + 8.0, title_w + 2.0, 18.0, 13.5, false, theme.surface, false, mtm);
+    if let Some(size) = cta.size() {
+        cursor += title_w + BEFORE_SIZE;
+        let amount = crate::widgets::label(parent, size, cursor, y + 9.0, size_w + 2.0, 16.0, 12.5, false, theme.surface, true, mtm);
+        amount.setAlphaValue(0.62);
+    }
+    let button = unsafe {
+        NSButton::buttonWithTitle_target_action(&NSString::from_str(""), Some(target), Some(action), mtm)
+    };
+    button.setBordered(false);
+    button.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, CTA_H)));
+    button.setTag(tag);
+    button.setEnabled(armed);
+    parent.addSubview(&button);
+}
+
+/// Pill-shaped toggle track + knob (mock: 38×22, radius 99). Paint only: the
+/// row it sits in is the click target, so a second button under the pill would
+/// only be a smaller way to hit the same thing.
+pub fn pill(parent: &objc2_app_kit::NSView, on: bool, x: f64, y: f64, theme: &Theme, mtm: MainThreadMarker) {
+    let track = if on { theme.ink } else { theme.surface_3 };
+    add_fill(parent, x, y, 38.0, 22.0, track, 1.0, 11.0, mtm);
+    let knob_x = if on { x + 18.0 } else { x + 2.0 };
+    add_fill(parent, knob_x, y + 2.0, 18.0, 18.0, theme.surface, 1.0, 9.0, mtm);
+}
+
+/// Keep-days NSSlider (0–30) matching the mock safety control.
+#[allow(clippy::too_many_arguments)]
+pub fn days_slider(
+    parent: &objc2_app_kit::NSView,
+    days: u64,
+    x: f64,
+    y: f64,
+    w: f64,
+    action: Sel,
+    target: &AnyObject,
+    tag: isize,
+    mtm: MainThreadMarker,
+) -> Retained<NSSlider> {
+    let slider = NSSlider::initWithFrame(
+        NSSlider::alloc(mtm),
+        NSRect::new(NSPoint::new(x, y), NSSize::new(w, 22.0)),
+    );
+    slider.setMinValue(0.0);
+    slider.setMaxValue(30.0);
+    slider.setDoubleValue(days.min(30) as f64);
+    slider.setContinuous(false);
+    slider.setTag(tag);
     unsafe {
-        popup.setTarget(Some(target));
-        popup.setAction(Some(action));
+        slider.setTarget(Some(target));
+        slider.setAction(Some(action));
     }
-    // A stored value outside `options` would otherwise leave item 0 selected and
-    // misrepresent the config; surface it as its own choice instead.
-    if !options.iter().any(|(value, _)| *value == active) {
-        popup.addItemWithTitle(&NSString::from_str(&format!("{active} (custom)")));
-        if let Some(item) = popup.lastItem() {
-            item.setTag(active as isize);
-        }
-    }
-    select_value(&popup, active as isize);
-    root.addSubview(&popup);
+    parent.addSubview(&slider);
+    slider
 }
 
-pub fn select_value(popup: &NSPopUpButton, tag: isize) -> bool {
-    let count = popup.numberOfItems();
-    for index in 0..count {
-        if let Some(item) = popup.itemAtIndex(index) {
-            if item.tag() == tag {
-                popup.selectItemAtIndex(index);
-                return true;
-            }
-        }
-    }
-    false
-}
-
-pub fn find(root: &NSView, tag: isize) -> Option<Retained<NSView>> {
-    root.viewWithTag(tag)
-}
-
-pub fn set_checkbox(root: &NSView, tag: isize, on: bool) {
-    if let Some(view) = find(root, tag) {
-        let button: &NSButton = unsafe { &*(&*view as *const NSView as *const NSButton) };
-        button.setState(if on { NSControlStateValueOn } else { NSControlStateValueOff });
-    }
-}
-
-pub fn checkbox_is_on(root: &NSView, tag: isize) -> bool {
-    find(root, tag).is_some_and(|view| {
-        let button: &NSButton = unsafe { &*(&*view as *const NSView as *const NSButton) };
-        button.state() == NSControlStateValueOn
-    })
-}
-
-/// Returns false when the popup has no choice carrying `value`.
-pub fn select_tag(root: &NSView, tag: isize, value: isize) -> bool {
-    match find(root, tag) {
-        Some(view) => {
-            let popup: &NSPopUpButton =
-                unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
-            select_value(popup, value)
-        }
-        None => false,
-    }
-}
-
-/// Append a choice for a config value the popup was not built with.
-pub fn add_custom_choice(root: &NSView, tag: isize, value: u64) {
-    let Some(view) = find(root, tag) else { return };
-    let popup: &NSPopUpButton = unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
-    popup.addItemWithTitle(&NSString::from_str(&format!("{value} (custom)")));
-    if let Some(item) = popup.lastItem() {
-        item.setTag(value as isize);
-    }
-}
-
-pub fn selected_tag(root: &NSView, tag: isize) -> Option<isize> {
-    let view = find(root, tag)?;
-    let popup: &NSPopUpButton = unsafe { &*(&*view as *const NSView as *const NSPopUpButton) };
-    popup.selectedItem().map(|item| item.tag())
+/// Attach ⌘ + key as the button's key equivalent.
+pub fn set_cmd_key(button: &NSButton, key: &str) {
+    button.setKeyEquivalent(&NSString::from_str(key));
+    button.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
 }

@@ -1,35 +1,66 @@
-// Entry point for the macOS WD-40 menu bar app.
-// Owns the status item, app state, and the Objective-C menu action handler.
-// Deps: objc2 AppKit bindings; background work lives in `tasks`.
+// Entry point for the macOS WD-40 status-item popover app.
+// Owns the status item, app state, and Objective-C action handler.
+// Deps: objc2 AppKit; UI in `popover` + views; work in `tasks`.
+
+mod actions;
+mod auto_clean;
 mod autostart;
+mod cache_names;
+mod can;
+mod checkbox;
+mod clean_view;
 mod controls;
-mod disk_panel;
-mod hover;
+mod crust;
+mod disk_gauge;
+mod done_view;
+mod drift;
+mod grip;
+mod header;
+mod hover_row;
 mod icon;
-mod menu;
+mod legend;
+mod live;
+mod medal;
 mod menu_rows;
+mod metal;
+mod motion;
+mod mainthread;
 mod names;
-mod rules_menu;
+mod pace;
+mod plate;
+mod popover;
+mod reveal;
+mod scan_rows;
+mod scrolling;
+mod scan_view;
+#[cfg(debug_assertions)]
+mod screenshot;
+mod selection;
+mod settings_roots;
+mod settings_row;
+mod settings_view;
+mod spray;
 mod state;
-mod settings_window;
 mod style;
 mod tasks;
+mod tasks_clean;
+mod theme;
+mod trace;
+mod treemap;
 mod updater;
+mod widgets;
 
-use menu::refresh_menu;
-use state::{with_state, with_state_ret, AppState};
+use state::{with_state, AppState, UiScreen};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSControlStateValueOn,
-    NSMenuItem, NSStatusBar,
+    NSApplication, NSApplicationActivationPolicy, NSButton, NSSlider, NSStatusBar,
 };
-use objc2_foundation::{MainThreadMarker, NSObject, NSString, NSTimer};
+use objc2_foundation::{MainThreadMarker, NSObject};
 use std::cell::RefCell;
 use updater::Updater;
 use wd40::config::Config;
-use wd40::scanner::ArtifactGroup;
 
 thread_local! {
     pub(crate) static HANDLER: RefCell<Option<Retained<MenuHandler>>> = const { RefCell::new(None) };
@@ -42,222 +73,157 @@ define_class!(
     pub struct MenuHandler;
 
     impl MenuHandler {
-        #[unsafe(method(handleCleanProject:))]
-        fn handle_clean_project(&self, sender: &NSMenuItem) {
-            let index = sender.tag() as usize;
-            let work = with_state_ret(|state| {
-                state.targets.get(index).map(|td| (td.path.clone(), td.size_bytes))
-            })
-            .flatten();
-            if let Some((path, size)) = work {
-                tasks::spawn_remove(path, size);
+        #[unsafe(method(togglePopover:))]
+        fn toggle_popover(&self, _sender: &AnyObject) {
+            popover::toggle(self.mtm());
+        }
+
+        #[unsafe(method(handleToggleItem:))]
+        fn handle_toggle_item(&self, sender: &NSButton) {
+            actions::toggle_item(sender.tag(), self.mtm());
+        }
+
+        #[unsafe(method(handleToggleGroup:))]
+        fn handle_toggle_group(&self, sender: &NSButton) {
+            let index = (sender.tag() - scan_view::TAG_GROUP_BASE) as usize;
+            let Some(&group) = wd40::scanner::ArtifactGroup::ALL.get(index) else { return };
+            with_state(|state| {
+                let empty = state.empty_targets();
+                selection::toggle_group(&state.targets, &mut state.selected, group, &empty);
+            });
+            if !live::selection_changed(self.mtm()) {
+                popover::refresh(self.mtm());
             }
         }
 
-        #[unsafe(method(handleCleanAll:))]
-        fn handle_clean_all(&self, _sender: &NSMenuItem) {
-            let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
-            tasks::spawn_clean_all(targets, "Clean All");
+        #[unsafe(method(handleRevealItem:))]
+        fn handle_reveal_item(&self, sender: &NSButton) {
+            reveal::reveal_item(sender.tag());
         }
 
-        #[unsafe(method(handleCleanOld:))]
-        fn handle_clean_old(&self, _sender: &NSMenuItem) {
-            if let Some((targets, max_age)) =
-                with_state_ret(|state| (state.targets.clone(), state.max_age()))
-            {
-                tasks::spawn_clean_old(targets, max_age, "Clean Old");
-            }
+        #[unsafe(method(handleCleanSelected:))]
+        fn handle_clean_selected(&self, _sender: &AnyObject) {
+            tasks::spawn_clean_selected();
         }
 
-        #[unsafe(method(handleCleanGroup:))]
-        fn handle_clean_group(&self, sender: &NSMenuItem) {
-            let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
-            let targets = with_state_ret(|state| {
-                state
-                    .targets
-                    .iter()
-                    .filter(|td| td.kind.group() == group)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-            tasks::spawn_clean_all(targets, group.label());
+        #[unsafe(method(handleStopClean:))]
+        fn handle_stop_clean(&self, _sender: &AnyObject) {
+            tasks::request_stop();
         }
 
-        #[unsafe(method(handleGroupInfo:))]
-        fn handle_group_info(&self, sender: &NSMenuItem) {
-            let Some(group) = ArtifactGroup::from_tag(sender.tag()) else { return };
-            show_alert(self.mtm(), group.label(), group.description());
+        /// The run is over; the screen is only still up to be read.
+        #[unsafe(method(handleShowResult:))]
+        fn handle_show_result(&self, _sender: &AnyObject) {
+            tasks::show_result_now(self.mtm());
+        }
+
+        #[unsafe(method(cleanHoldTick:))]
+        fn clean_hold_tick(&self, _sender: *mut AnyObject) {
+            tasks::show_result(self.mtm());
+        }
+
+        #[unsafe(method(handleDoneAck:))]
+        fn handle_done_ack(&self, _sender: &AnyObject) {
+            actions::done_ack(self.mtm());
+        }
+
+        #[unsafe(method(handleShowMore:))]
+        fn handle_show_more(&self, _sender: &AnyObject) {
+            actions::show_more(self.mtm());
         }
 
         #[unsafe(method(handleRescan:))]
-        fn handle_rescan(&self, _sender: &NSMenuItem) {
-            tasks::start_scan(false);
-        }
-
-        #[unsafe(method(handleSetAutoInterval:))]
-        fn handle_set_auto_interval(&self, sender: &NSMenuItem) {
-            let hours = sender.tag() as u64;
-            let mtm = self.mtm();
-            with_state(|state| {
-                state.config.auto_clean_hours = hours;
-                state.config.save();
-                if hours > 0 {
-                    tasks::start_auto_clean(hours);
-                } else {
-                    tasks::stop_auto_clean();
-                }
-                refresh_menu(state, mtm);
-            });
-        }
-
-        #[unsafe(method(handleSetMaxAge:))]
-        fn handle_set_max_age(&self, sender: &NSMenuItem) {
-            let days = sender.tag() as u64;
-            let mtm = self.mtm();
-            with_state(|state| {
-                state.config.max_age_days = days;
-                state.config.save();
-                refresh_menu(state, mtm);
-            });
-        }
-
-        #[unsafe(method(handleToggleLoginItem:))]
-        fn handle_toggle_login_item(&self, sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            let enable = sender.state() != NSControlStateValueOn;
-            if let Err(err) = autostart::set_enabled(enable) {
-                show_alert(mtm, "Launch at Login", &err);
-            }
-            with_state(|state| refresh_menu(state, mtm));
-        }
-
-        #[unsafe(method(handleToggleAutoUpdate:))]
-        fn handle_toggle_auto_update(&self, _sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            with_state(|state| {
-                if let Some(updater) = state.updater.as_ref() {
-                    updater.set_automatic_checks(!updater.automatic_checks());
-                }
-                refresh_menu(state, mtm);
-            });
+        fn handle_rescan(&self, _sender: &AnyObject) {
+            // start_scan must still see Done so it can leave that screen now.
+            tasks::start_scan();
         }
 
         #[unsafe(method(openSettings:))]
-        fn open_settings(&self, _sender: &NSMenuItem) {
-            let mtm = self.mtm();
-            with_state(|state| {
-                let auto_update = state.updater.as_ref().map(|updater| updater.automatic_checks());
-                let target: &AnyObject =
-                    unsafe { &*(self as *const Self as *const AnyObject) };
-                settings_window::show(
-                    &state.config,
-                    auto_update,
-                    &updater::bundle_version(),
-                    target,
-                    mtm,
-                );
-            });
+        fn open_settings(&self, _sender: &AnyObject) {
+            actions::open_settings(self.mtm());
         }
 
-        /// One control changed: write back only the field that control owns.
-        /// Reading the whole window would let an edit clobber a field whose
-        /// popup cannot represent the stored value.
-        #[unsafe(method(settingsChanged:))]
-        fn settings_changed(&self, sender: &AnyObject) {
-            let mtm = self.mtm();
-            let tag: isize = unsafe { msg_send![sender, tag] };
-            let Some(change) = settings_window::read_change(tag) else { return };
-            let mut rescan = false;
-            with_state(|state| {
-                match change {
-                    settings_window::Change::Interval(hours) => {
-                        state.config.auto_clean_hours = hours;
-                        if hours > 0 {
-                            tasks::start_auto_clean(hours);
-                        } else {
-                            tasks::stop_auto_clean();
-                        }
-                    }
-                    settings_window::Change::MaxAge(days) => state.config.max_age_days = days,
-                    settings_window::Change::Artifacts(selected) => {
-                        state.config.artifact_types =
-                            wd40::config::merge_artifact_types(&state.config.artifact_types, &selected);
-                        // Targets were found under the old type set, so they would
-                        // stay listed and deletable after a type is switched off.
-                        rescan = true;
-                    }
-                }
-                state.config.save();
-                refresh_menu(state, mtm);
-            });
-            if rescan {
-                tasks::start_scan(false);
-            }
+        #[unsafe(method(settingsInterval:))]
+        fn settings_interval(&self, sender: &NSButton) {
+            actions::interval(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsSetMaxAge:))]
+        fn settings_set_max_age(&self, sender: &NSSlider) {
+            let days = sender.doubleValue().round().clamp(0.0, 30.0) as u64;
+            actions::set_max_age(days, self.mtm());
+        }
+
+        #[unsafe(method(settingsDepth:))]
+        fn settings_depth(&self, sender: &NSButton) {
+            actions::depth(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsToggleGroup:))]
+        fn settings_toggle_group(&self, sender: &NSButton) {
+            actions::toggle_scan_group(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsToggleMenuBarSize:))]
+        fn settings_toggle_menu_bar_size(&self, _sender: &AnyObject) {
+            actions::toggle_menu_bar_size(self.mtm());
+        }
+
+        #[unsafe(method(settingsAddRoot:))]
+        fn settings_add_root(&self, _sender: &AnyObject) {
+            actions::add_scan_root(self.mtm());
+        }
+
+        #[unsafe(method(settingsRemoveRoot:))]
+        fn settings_remove_root(&self, sender: &NSButton) {
+            actions::remove_scan_root(sender, self.mtm());
+        }
+
+        #[unsafe(method(settingsBack:))]
+        fn settings_back(&self, _sender: &AnyObject) {
+            actions::close_settings(self.mtm());
         }
 
         #[unsafe(method(settingsToggleLoginItem:))]
-        fn settings_toggle_login_item(&self, sender: &AnyObject) {
-            let mtm = self.mtm();
-            let state_value: isize = unsafe { msg_send![sender, state] };
-            let failed = autostart::set_enabled(state_value == NSControlStateValueOn).err();
-            with_state(|state| {
-                if let Some(err) = failed.as_ref() {
-                    // Put the checkbox back where reality is before reporting.
-                    let auto_update = state.updater.as_ref().map(|u| u.automatic_checks());
-                    settings_window::resync(&state.config, auto_update);
-                    show_alert(mtm, "Launch at Login", err);
-                }
-                refresh_menu(state, mtm);
-            });
+        fn settings_toggle_login_item(&self, _sender: &AnyObject) {
+            actions::toggle_login(self.mtm());
         }
 
         #[unsafe(method(settingsToggleAutoUpdate:))]
-        fn settings_toggle_auto_update(&self, sender: &AnyObject) {
-            let state_value: isize = unsafe { msg_send![sender, state] };
-            with_state(|state| {
-                if let Some(updater) = state.updater.as_ref() {
-                    updater.set_automatic_checks(state_value == NSControlStateValueOn);
-                }
-            });
+        fn settings_toggle_auto_update(&self, _sender: &AnyObject) {
+            actions::toggle_auto_update(self.mtm());
         }
 
         #[unsafe(method(settingsCheckForUpdates:))]
         fn settings_check_for_updates(&self, _sender: &AnyObject) {
-            with_state(|state| {
-                if let Some(updater) = state.updater.as_ref() {
-                    updater.check_now();
-                }
-            });
-        }
-
-        #[unsafe(method(animTick:))]
-        fn anim_tick(&self, _sender: &NSTimer) {
-            tasks::tick_anim(self.mtm());
+            actions::check_updates();
         }
 
         #[unsafe(method(autoCleanTick:))]
-        fn auto_clean_tick(&self, _sender: &NSTimer) {
-            if !tasks::is_busy() {
-                tasks::start_scan(true);
-            }
+        fn auto_clean_tick(&self, _sender: *mut AnyObject) {
+            auto_clean::start();
         }
 
         #[unsafe(method(autoScanTick:))]
-        fn auto_scan_tick(&self, _sender: &NSTimer) {
+        fn auto_scan_tick(&self, _sender: *mut AnyObject) {
             if !tasks::is_busy() {
-                tasks::start_scan(false);
+                tasks::start_scan();
             }
-        }
-
-        #[unsafe(method(shineTick:))]
-        fn shine_tick(&self, _sender: &NSTimer) {
-            tasks::on_shine_done();
         }
 
         #[unsafe(method(scanDone:))]
         fn scan_done(&self, _sender: *mut AnyObject) {
             tasks::on_scan_done(self.mtm());
+        }
+
+        #[unsafe(method(sizesTick:))]
+        fn sizes_tick(&self, _sender: *mut AnyObject) {
+            tasks::on_sizes_tick(self.mtm());
+        }
+
+        #[unsafe(method(reclaimDone:))]
+        fn reclaim_done(&self, _sender: *mut AnyObject) {
+            tasks::on_reclaim_done(self.mtm());
         }
 
         #[unsafe(method(sizesDone:))]
@@ -270,8 +236,13 @@ define_class!(
             tasks::on_clean_done(self.mtm());
         }
 
+        #[unsafe(method(cleanProgress:))]
+        fn clean_progress(&self, _sender: *mut AnyObject) {
+            tasks::on_progress(self.mtm());
+        }
+
         #[unsafe(method(quit:))]
-        fn quit(&self, _sender: &NSMenuItem) {
+        fn quit(&self, _sender: &AnyObject) {
             NSApplication::sharedApplication(self.mtm()).terminate(None);
         }
     }
@@ -284,22 +255,21 @@ impl MenuHandler {
     }
 }
 
-fn show_alert(mtm: MainThreadMarker, title: &str, body: &str) {
-    let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str(title));
-    alert.setInformativeText(&NSString::from_str(body));
-    alert.setAlertStyle(NSAlertStyle::Informational);
-    #[allow(deprecated)]
-    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-    alert.runModal();
-}
-
 fn main() {
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
+    // Force AppKit appearance to match the requested theme so layer-backed
+    // system controls (and our token pick) agree in screenshots.
+    if let Ok(value) = std::env::var("WD40_APPEARANCE") {
+        theme::set_app_appearance(value.eq_ignore_ascii_case("dark"), mtm);
+    }
+
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+    // Level two first: the scan that starts a moment from now is the one it
+    // exists to spare.
+    wd40::cache::load();
     let config = Config::load();
     let auto_hours = config.auto_clean_hours;
 
@@ -307,13 +277,19 @@ fn main() {
     state::install(AppState {
         config,
         targets: Vec::new(),
+        measured: Default::default(),
+        selected: Default::default(),
+        show_all: false,
+        screen: UiScreen::Scan,
+        cleaning: None,
+        done: None,
         status_item,
         updater: Updater::start(),
+        reclaim: None,
     });
 
-    // Always start with a scan — zero-config, like npkill/kondo
-    with_state(|state| refresh_menu(state, mtm));
-    tasks::start_scan(false);
+    popover::attach(mtm);
+    tasks::start_scan();
     tasks::start_auto_scan();
     if auto_hours > 0 {
         tasks::start_auto_clean(auto_hours);

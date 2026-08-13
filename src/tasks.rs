@@ -1,57 +1,106 @@
-// Background scan/clean orchestration for the WD-40 menu bar app.
-// Exports: scan/clean spawners, timer control, and main-thread completion hooks.
-// Deps: objc2, libdispatch FFI, crate::{menu, with_state}.
+// Background scan/clean orchestration for the WD-40 popover app.
+// Exports: scan/clean spawners, timer control, main-thread completion hooks.
+// Deps: objc2, crate::{live, mainthread, names, popover, state, tasks_clean}.
 
-use crate::menu::{add_caption, refresh_menu};
-use crate::{with_state, with_state_ret, MenuHandler, HANDLER};
+use crate::live;
+use crate::popover;
+use crate::state::{
+    with_state, with_state_ret, CleanProgress, DoneSummary, UiScreen,
+};
+use crate::tasks_clean::{self, gather_job, initial_progress, CleanJob};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{msg_send, sel, MainThreadOnly};
-use objc2_app_kit::NSMenu;
-use objc2_foundation::{ns_string, MainThreadMarker, NSString, NSTimer};
+use objc2::sel;
+use objc2_foundation::{MainThreadMarker, NSTimer};
+use crate::mainthread::{
+    clean_done_trampoline, dispatch_to_main, progress_trampoline, scan_done_trampoline, schedule,
+    sizes_done_trampoline, sizes_tick_trampoline, stop_timer,
+};
 use std::cell::RefCell;
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
-use wd40::cleaner::{clean_all, clean_old};
+use std::time::Instant;
 use wd40::disk::disk_space;
-use wd40::scanner::{human_size, scan_discover, scan_sizes, TargetDir};
+use wd40::discover::scan_discover;
+use wd40::scanner::TargetDir;
+use wd40::sizes::size_targets;
 
-/// How often the app rescans on its own, in seconds.
-const AUTO_SCAN_INTERVAL: f64 = 5.0 * 60.0;
-/// Minimum time the sweeping animation stays visible, so it reads as work done.
-const MIN_CLEAN_ANIMATION: Duration = Duration::from_secs(2);
+/// How often the app rescans on its own, in seconds. Ten minutes rather than
+/// five: nothing on screen goes stale enough in that time to be worth waking
+/// the disk for, and the figures that cost the most to measure do not change
+/// at all between two of them.
+const AUTO_SCAN_INTERVAL: f64 = 10.0 * 60.0;
+
+/// A clean that takes a moment is worth watching, and one that takes none at
+/// all used to flash past before anything could be read. The floor is on the
+/// screen alone: removal starts the instant it is asked for, nothing waits on
+/// it, and every figure on the held screen is the finished one.
+const MIN_CLEAN_SCREEN: f64 = 2.0;
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
-static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
-static ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
+static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
-static SIZES_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
+static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
+static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
+/// The finished summary, waiting for the cleaning screen to have been up long
+/// enough to have been read.
+static PENDING_DONE: Mutex<Option<DoneSummary>> = Mutex::new(None);
+static CLEAN_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
+static PROGRESS: Mutex<Option<CleanProgress>> = Mutex::new(None);
+/// Sizes that have settled but not yet reached the screen.
+static SIZES: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
+/// One pending hop to the main thread at a time, however fast sizes arrive.
+static SIZE_HOP: AtomicBool = AtomicBool::new(false);
+static PROGRESS_HOP: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    static ANIM_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
     static AUTO_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
     static SCAN_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
-    static SHINE_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+    /// Runs out the rest of the cleaning screen's minimum time. It carries no
+    /// work; the run is already over by the time it is scheduled.
+    static HOLD_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub fn is_busy() -> bool {
     CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed)
 }
 
-/// Dispatch discovery to a background thread. `then_clean` chains auto-clean after sizing.
-pub fn start_scan(then_clean: bool) {
-    let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
-    if SCANNING.swap(true, Ordering::Relaxed) {
+/// True once the user has asked the current run to stop starting new targets.
+pub fn stop_requested() -> bool {
+    STOP_AFTER.load(Ordering::Relaxed)
+}
+
+pub(crate) fn clean_stop_flag() -> &'static AtomicBool {
+    &STOP_AFTER
+}
+
+pub(crate) fn reset_clean_stop() {
+    STOP_AFTER.store(false, Ordering::Relaxed);
+}
+
+pub fn start_scan() {
+    if crate::trace::active() {
         return;
     }
-    if then_clean {
-        POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
+    let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
+    if CLEANING.load(Ordering::Relaxed) || SCANNING.swap(true, Ordering::Relaxed) {
+        return;
     }
+    crate::auto_clean::discard_pending_snapshot();
+    crate::auto_clean::clear_receipt();
     if let Some(mtm) = MainThreadMarker::new() {
-        show_scanning_menu(mtm);
+        let left_done = with_state_ret(|state| {
+            let was = state.screen == UiScreen::Done;
+            if was {
+                state.screen = UiScreen::Scan;
+            }
+            was
+        })
+        .unwrap_or(false);
+        // Only Done has to change now; on_scan_done rebuilds the list.
+        if left_done {
+            popover::refresh(mtm);
+        }
     }
     std::thread::spawn(move || {
         *SCAN_RESULT.lock().unwrap() = Some(scan_discover(&config));
@@ -59,161 +108,234 @@ pub fn start_scan(then_clean: bool) {
     });
 }
 
-fn show_scanning_menu(mtm: MainThreadMarker) {
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str("\u{1f50d}"));
-        }
-        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("WD-40"));
-        menu.setAutoenablesItems(false);
-        add_caption(&menu, "Scanning\u{2026}", mtm);
-        state.status_item.setMenu(Some(&menu));
-    });
-}
-
-/// Phase 1 finished: show the discovered paths, then size them in the background.
 pub fn on_scan_done(mtm: MainThreadMarker) {
+    // A new scan replaces the rows, so the remembered offset would point at
+    // targets that are no longer there.
+    crate::scrolling::reset_scroll();
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
         return;
     };
+    SIZES.lock().unwrap().clear();
     with_state(|state| {
         state.targets = targets;
-        refresh_menu(state, mtm);
+        state.measured.clear();
+        state.reset_selection();
     });
-    let mut pending: Vec<TargetDir> = with_state_ret(|state| {
-        state
-            .targets
-            .iter()
-            .map(|td| TargetDir { size_bytes: 0, ..td.clone() })
-            .collect()
-    })
-    .unwrap_or_default();
+    popover::refresh(mtm);
+    let pending: Vec<TargetDir> =
+        with_state_ret(|state| state.targets.clone()).unwrap_or_default();
     std::thread::spawn(move || {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_sizes(&mut pending)));
-        *SIZES_RESULT.lock().unwrap() = Some(pending);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            size_targets(&pending, |sized| {
+                SIZES.lock().unwrap().push((sized.index, sized.bytes));
+                if !SIZE_HOP.swap(true, Ordering::SeqCst) {
+                    dispatch_to_main(sizes_tick_trampoline);
+                }
+            });
+        }));
         dispatch_to_main(sizes_done_trampoline);
     });
 }
 
-/// Phase 2 finished: publish sizes and run the queued auto-clean, if any.
+/// Sizes that settled since the last hop. Patches the rows in place — the list
+/// keeps its order and its scroll position until the whole pass is done.
+pub fn on_sizes_tick(mtm: MainThreadMarker) {
+    SIZE_HOP.store(false, Ordering::SeqCst);
+    let arrived = std::mem::take(&mut *SIZES.lock().unwrap());
+    if arrived.is_empty() {
+        return;
+    }
+    let indices: Vec<usize> = arrived.iter().map(|(index, _)| *index).collect();
+    with_state(|state| {
+        for (index, bytes) in arrived {
+            state.apply_size(index, bytes);
+        }
+    });
+    if !live::sizes_arrived(&indices, mtm) {
+        popover::refresh(mtm);
+    }
+    popover::refresh_status(mtm);
+}
+
 pub fn on_sizes_done(mtm: MainThreadMarker) {
     SCANNING.store(false, Ordering::Relaxed);
-    if let Some(targets) = SIZES_RESULT.lock().unwrap().take() {
-        with_state(|state| {
-            state.targets = targets;
-            refresh_menu(state, mtm);
-        });
-    }
-    if !POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
+    on_sizes_tick(mtm);
+    // Only now is there a full set of figures to sort by, so this is the one
+    // point at which rows are allowed to move.
+    with_state(|state| state.finish_sizing());
+    popover::refresh(mtm);
+    start_reclaim();
+    #[cfg(debug_assertions)]
+    crate::screenshot::maybe_start(mtm);
+}
+
+/// Work out what the targets really occupy on the device. One `open` per file
+/// over every target is 71 s on this Mac, so it runs after the sizes are on
+/// screen rather than before, at background priority, and the totals use summed
+/// sizes until it lands.
+///
+/// It is also skipped outright when nothing has moved. An automatic rescan every
+/// ten minutes usually finds the same directories at the same sizes, and reading
+/// four hundred thousand files again to reach the same answer is the kind of
+/// work a menu bar app has no business doing.
+fn start_reclaim() {
+    let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
+    if targets.is_empty() {
         return;
     }
-    if let Some((targets, max_age)) = with_state_ret(|state| (state.targets.clone(), state.max_age())) {
-        spawn_clean_old(targets, max_age, "Auto Clean");
-    }
-}
-
-pub fn spawn_clean_all(targets: Vec<TargetDir>, label: &'static str) {
-    start_clean(move || {
-        let result = clean_all(&targets);
-        if result.removed_count > 0 {
-            println!("{label} freed {} from {} dirs", human_size(result.freed_bytes), result.removed_count);
-        }
-    });
-}
-
-pub fn spawn_clean_old(targets: Vec<TargetDir>, max_age: Duration, label: &'static str) {
-    start_clean(move || {
-        let result = clean_old(&targets, max_age);
-        if result.removed_count > 0 {
-            println!("{label} freed {} from {} dirs", human_size(result.freed_bytes), result.removed_count);
-        }
-    });
-}
-
-pub fn spawn_remove(path: std::path::PathBuf, size: u64) {
-    start_clean(move || match std::fs::remove_dir_all(&path) {
-        Ok(()) => println!("Cleaned {} ({})", path.display(), human_size(size)),
-        Err(err) => eprintln!("Failed {}: {}", path.display(), err),
-    });
-}
-
-fn start_clean<F: FnOnce() + Send + 'static>(work: F) {
-    if CLEANING.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    start_anim();
-    // Summed target sizes overstate what a delete returns whenever APFS clones
-    // share blocks between targets, so measure the volume instead of trusting
-    // the arithmetic. See docs/apfs-clone-overcount.md.
-    let reference = with_state_ret(|state| state.reference_path()).flatten();
-    let before = reference.as_deref().and_then(disk_space).map(|d| d.free_bytes);
     std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        work();
-        if let Some(remaining) = MIN_CLEAN_ANIMATION.checked_sub(started.elapsed()) {
-            std::thread::sleep(remaining);
-        }
-        report_reclaimed(before, reference.as_deref());
+        // `measure` answers from the two-level store when the same directories
+        // come back at the same sizes, so this is free far more often than it
+        // is expensive — including on the first scan after a restart.
+        *RECLAIM_RESULT.lock().unwrap() = wd40::reclaim::Reclaim::measure(&targets);
+        wd40::cache::flush();
+        dispatch_to_main(crate::mainthread::reclaim_done_trampoline);
+    });
+}
+
+/// The accounting is in: totals stop being a sum and start being a promise.
+pub fn on_reclaim_done(mtm: MainThreadMarker) {
+    let Some(found) = RECLAIM_RESULT.lock().unwrap().take() else { return };
+    with_state(|state| {
+        // Printed because the difference between these two numbers is the whole
+        // point of the pass, and a run where it never lands looks from outside
+        // exactly like one where the disk really does hold that much.
+        let summed = wd40::scanner::human_size(state.total_size());
+        state.reclaim = Some(found);
+        println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
+    });
+    if !live::totals_changed(mtm) {
+        popover::refresh(mtm);
+    }
+    popover::refresh_status(mtm);
+}
+
+/// Clean exactly the checked items. Irreversible; nothing else is touched.
+pub fn spawn_clean_selected() {
+    let Some(job) = gather_job() else { return };
+    let CleanJob { items, skipped_count, skipped_bytes, reference } = job;
+    if items.is_empty() || !claim_cleaning() {
+        return;
+    }
+    STOP_AFTER.store(false, Ordering::Relaxed);
+    let before = reference.as_deref().and_then(disk_space);
+    let progress = initial_progress(&items);
+    *PROGRESS.lock().unwrap() = Some(progress.clone());
+    with_state(|state| {
+        state.screen = UiScreen::Cleaning;
+        state.cleaning = Some(progress.clone());
+        state.done = None;
+    });
+    if let Some(mtm) = MainThreadMarker::new() {
+        // A run of its own cancels whatever the last one was still showing.
+        stop_timer(&HOLD_TIMER);
+        *PENDING_DONE.lock().unwrap() = None;
+        *CLEAN_SHOWN.lock().unwrap() = Some(Instant::now());
+        popover::refresh(mtm);
+    }
+
+    std::thread::spawn(move || {
+        let summary = tasks_clean::run_clean(
+            items,
+            skipped_count,
+            skipped_bytes,
+            reference,
+            before,
+            progress,
+            |p| {
+                *PROGRESS.lock().unwrap() = Some(p.clone());
+                if !PROGRESS_HOP.swap(true, Ordering::SeqCst) {
+                    dispatch_to_main(progress_trampoline);
+                }
+            },
+            &STOP_AFTER,
+        );
+        *DONE_RESULT.lock().unwrap() = Some(summary);
         dispatch_to_main(clean_done_trampoline);
     });
 }
 
-/// Print what the volume actually gave back, which is the only figure that
-/// survives clone sharing.
-fn report_reclaimed(before: Option<u64>, reference: Option<&std::path::Path>) {
-    let (Some(before), Some(reference)) = (before, reference) else { return };
-    let Some(after) = disk_space(reference).map(|d| d.free_bytes) else { return };
-    let reclaimed = after.saturating_sub(before);
-    println!("Reclaimed {} of disk space", human_size(reclaimed));
+pub(crate) fn claim_cleaning() -> bool {
+    !CLEANING.swap(true, Ordering::Relaxed)
 }
 
-/// Clean finished: show the sparkle, then rescan a second later.
-pub fn on_clean_done(mtm: MainThreadMarker) {
-    stop_timer(&ANIM_TIMER);
+pub(crate) fn finish_cleaning() {
     CLEANING.store(false, Ordering::Relaxed);
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str("\u{2728}"));
-        }
-    });
-    schedule(&SHINE_TIMER, 1.0, sel!(shineTick:), false);
 }
 
-pub fn on_shine_done() {
-    stop_timer(&SHINE_TIMER);
-    start_scan(false);
-}
-
-pub fn tick_anim(mtm: MainThreadMarker) {
-    let frame = ANIM_FRAME.fetch_add(1, Ordering::Relaxed);
-    let dots = match frame % 4 {
-        0 => "\u{1f9f9}",
-        1 => "\u{1f9f9} .",
-        2 => "\u{1f9f9} ..",
-        _ => "\u{1f9f9} ...",
-    };
-    with_state(|state| {
-        if let Some(button) = state.status_item.button(mtm) {
-            button.setImage(None);
-            button.setTitle(&NSString::from_str(dots));
-        }
-    });
-}
-
-fn start_anim() {
-    ANIM_FRAME.store(0, Ordering::Relaxed);
-    if let Some(mtm) = MainThreadMarker::new() {
-        with_state(|state| {
-            if let Some(button) = state.status_item.button(mtm) {
-                button.setImage(None);
-                button.setTitle(&NSString::from_str("\u{1f9f9}"));
-            }
-        });
+pub fn on_progress(mtm: MainThreadMarker) {
+    PROGRESS_HOP.store(false, Ordering::SeqCst);
+    let snapshot = PROGRESS.lock().unwrap().clone();
+    with_state(|state| state.cleaning = snapshot);
+    if !live::progress_changed(mtm) {
+        popover::refresh(mtm);
     }
-    schedule(&ANIM_TIMER, 0.25, sel!(animTick:), true);
+}
+
+pub fn request_stop() {
+    STOP_AFTER.store(true, Ordering::Relaxed);
+    // Say so straight away: the button has to stop offering what it has
+    // already been asked to do.
+    if let Some(mtm) = MainThreadMarker::new() {
+        if !live::progress_changed(mtm) {
+            popover::refresh(mtm);
+        }
+    }
+}
+
+pub fn on_clean_done(mtm: MainThreadMarker) {
+    finish_cleaning();
+    *PENDING_DONE.lock().unwrap() = DONE_RESULT.lock().unwrap().take();
+    // The last thing the run published is what really happened. It goes on
+    // screen before anything is held back, so a held screen is a finished one:
+    // the counts, the bar and the plate all read done because they are.
+    let settled = PROGRESS.lock().unwrap().clone();
+    with_state(|state| state.cleaning = settled);
+    let Some(seconds) = hold_left() else { return show_result(mtm) };
+    if !live::progress_changed(mtm) {
+        popover::refresh(mtm);
+    }
+    schedule(&HOLD_TIMER, seconds, sel!(cleanHoldTick:), false);
+}
+
+/// Seconds the cleaning screen has still to run, or None when it owes none —
+/// a job that already took longer than the floor, or Reduce Motion, which is
+/// never made to wait for a screen.
+fn hold_left() -> Option<f64> {
+    if crate::metal::reduce_motion() {
+        return None;
+    }
+    let shown = (*CLEAN_SHOWN.lock().unwrap())?;
+    let left = MIN_CLEAN_SCREEN - shown.elapsed().as_secs_f64();
+    (left > 0.05).then_some(left)
+}
+
+/// Hand the finished run to the done screen. Called by the floor's timer, and
+/// straight away when there is no floor left to run out.
+pub fn show_result(mtm: MainThreadMarker) {
+    stop_timer(&HOLD_TIMER);
+    // A new run started while this one was being shown; its screen wins.
+    if CLEANING.load(Ordering::Relaxed) {
+        return;
+    }
+    let summary = PENDING_DONE.lock().unwrap().take();
+    *PROGRESS.lock().unwrap() = None;
+    *CLEAN_SHOWN.lock().unwrap() = None;
+    with_state(|state| {
+        state.cleaning = None;
+        state.done = summary;
+        state.screen = UiScreen::Done;
+    });
+    popover::refresh(mtm);
+}
+
+/// The button on the held screen. It only skips the wait — there is nothing to
+/// show until the run has handed its summary over.
+pub fn show_result_now(mtm: MainThreadMarker) {
+    if PENDING_DONE.lock().unwrap().is_some() {
+        show_result(mtm);
+    }
 }
 
 pub fn start_auto_scan() {
@@ -227,58 +349,4 @@ pub fn start_auto_clean(hours: u64) {
 
 pub fn stop_auto_clean() {
     stop_timer(&AUTO_TIMER);
-}
-
-type TimerSlot = std::thread::LocalKey<RefCell<Option<Retained<NSTimer>>>>;
-
-fn schedule(slot: &'static TimerSlot, interval: f64, selector: objc2::runtime::Sel, repeats: bool) {
-    HANDLER.with(|cell| {
-        let Some(handler) = cell.borrow().as_ref().map(Retained::clone) else { return };
-        let target: &AnyObject = unsafe { &*(&*handler as *const MenuHandler as *const AnyObject) };
-        let timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                interval, target, selector, None, repeats,
-            )
-        };
-        slot.with(|cell| *cell.borrow_mut() = Some(timer));
-    });
-}
-
-fn stop_timer(slot: &'static TimerSlot) {
-    slot.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.invalidate();
-        }
-    });
-}
-
-fn dispatch_to_main(work: extern "C" fn(*mut c_void)) {
-    unsafe {
-        dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q), std::ptr::null_mut(), work);
-    }
-}
-
-macro_rules! trampoline {
-    ($name:ident, $selector:ident) => {
-        extern "C" fn $name(_ctx: *mut c_void) {
-            HANDLER.with(|cell| {
-                if let Some(handler) = cell.borrow().as_ref() {
-                    let obj: &AnyObject =
-                        unsafe { &*(handler.as_ref() as *const MenuHandler as *const AnyObject) };
-                    let _: () = unsafe { msg_send![obj, $selector: std::ptr::null::<AnyObject>()] };
-                }
-            });
-        }
-    };
-}
-
-trampoline!(scan_done_trampoline, scanDone);
-trampoline!(sizes_done_trampoline, sizesDone);
-trampoline!(clean_done_trampoline, cleanDone);
-
-// libdispatch FFI — _dispatch_main_q is the actual symbol on macOS
-#[link(name = "System", kind = "dylib")]
-extern "C" {
-    static _dispatch_main_q: c_void;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }

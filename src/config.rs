@@ -1,5 +1,6 @@
 // Config definitions for WD-40.
 // Handles defaults and TOML parsing.
+use crate::scanner::ArtifactGroup;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -14,22 +15,15 @@ pub struct Config {
     pub max_age_days: u64,
     pub max_depth: usize,
     pub auto_clean_hours: u64,
-    /// Which artifact dir names to scan. Defaults to all known types.
+    /// Which artifact dir names the walk matches. Defaults to all known types;
+    /// a name outside `ARTIFACT_DIRS` counts as build output.
     pub artifact_types: Vec<String>,
-}
-
-/// Replace the known artifact types with `selected`, keeping any custom entry
-/// the user added by hand. The window can only represent `ARTIFACT_DIRS`, so a
-/// blind rewrite would silently delete anything outside that list.
-pub fn merge_artifact_types(existing: &[String], selected: &[String]) -> Vec<String> {
-    let mut merged: Vec<String> = selected.to_vec();
-    merged.extend(
-        existing
-            .iter()
-            .filter(|name| !ARTIFACT_DIRS.iter().any(|known| known == &name.as_str()))
-            .cloned(),
-    );
-    merged
+    /// Which artifact groups are looked for at all, by `ArtifactGroup::key`.
+    /// A group that is not in here is never discovered, so it costs nothing to
+    /// walk and shows no figure it did not measure.
+    pub scan_groups: Vec<String>,
+    /// Print the reclaimable total beside the menu bar glyph.
+    pub menu_bar_size: bool,
 }
 
 impl Default for Config {
@@ -40,11 +34,26 @@ impl Default for Config {
             max_depth: 5,
             auto_clean_hours: 0,
             artifact_types: ARTIFACT_DIRS.iter().map(|s| s.to_string()).collect(),
+            scan_groups: ArtifactGroup::ALL.iter().map(|g| g.key().to_string()).collect(),
+            menu_bar_size: true,
         }
     }
 }
 
 impl Config {
+    /// True when this group is one the scan looks for.
+    pub fn scans(&self, group: ArtifactGroup) -> bool {
+        self.scan_groups.iter().any(|key| key == group.key())
+    }
+
+    /// Turn a group on or off, leaving every other group as it was.
+    pub fn set_scans(&mut self, group: ArtifactGroup, on: bool) {
+        self.scan_groups.retain(|key| key != group.key());
+        if on {
+            self.scan_groups.push(group.key().to_string());
+        }
+    }
+
     pub fn load() -> Self {
         if let Some(path) = Self::config_path() {
             if let Ok(contents) = fs::read_to_string(&path) {
@@ -83,27 +92,42 @@ fn default_scan_dirs() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_artifact_types;
+    use super::Config;
+    use crate::scanner::ArtifactGroup;
 
-    fn owned(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
+    #[test]
+    fn every_group_is_scanned_by_default() {
+        let config = Config::default();
+        assert!(ArtifactGroup::ALL.iter().all(|group| config.scans(*group)));
     }
 
     #[test]
-    fn merge_keeps_custom_entries_the_window_cannot_show() {
-        let merged = merge_artifact_types(&owned(&["target", "vendor"]), &owned(&["target", "dist"]));
-        assert_eq!(merged, owned(&["target", "dist", "vendor"]));
+    fn switching_one_group_off_leaves_the_others_alone() {
+        let mut config = Config::default();
+        config.set_scans(ArtifactGroup::Caches, false);
+        assert!(!config.scans(ArtifactGroup::Caches));
+        assert!(config.scans(ArtifactGroup::Rust));
+        assert!(config.scans(ArtifactGroup::NodeModules));
+        assert!(config.scans(ArtifactGroup::BuildOutput));
     }
 
     #[test]
-    fn merge_drops_known_types_that_were_unchecked() {
-        let merged = merge_artifact_types(&owned(&["target", "dist"]), &owned(&["target"]));
-        assert_eq!(merged, owned(&["target"]));
+    fn switching_a_group_back_on_does_not_list_it_twice() {
+        let mut config = Config::default();
+        config.set_scans(ArtifactGroup::Rust, false);
+        config.set_scans(ArtifactGroup::Rust, true);
+        config.set_scans(ArtifactGroup::Rust, true);
+        assert_eq!(config.scan_groups.iter().filter(|key| *key == "rust").count(), 1);
+        assert!(config.scans(ArtifactGroup::Rust));
     }
 
+    /// A config file written before `scan_groups` existed parses with every
+    /// group on, rather than with an empty list that would find nothing.
     #[test]
-    fn merge_handles_an_empty_selection_without_losing_custom_entries() {
-        let merged = merge_artifact_types(&owned(&["dist", "vendor"]), &[]);
-        assert_eq!(merged, owned(&["vendor"]));
+    fn a_config_without_scan_groups_still_scans_everything() {
+        let config: Config = toml::from_str("max_age_days = 3\n").expect("parses");
+        assert_eq!(config.max_age_days, 3);
+        assert!(ArtifactGroup::ALL.iter().all(|group| config.scans(*group)));
+        assert!(config.menu_bar_size);
     }
 }

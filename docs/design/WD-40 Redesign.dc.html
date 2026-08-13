@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/ming-s-work-design-system-6e1e4082-0949-44b2-8907-78bc195ffbdc/colors_and_type.css">
+<script src="_ds/ming-s-work-design-system-6e1e4082-0949-44b2-8907-78bc195ffbdc/_ds_bundle.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<style>
+  body { margin:0; background:#E8E6E2; font-family:'IBM Plex Sans',system-ui,sans-serif; }
+  a { color: var(--ink); }
+  a:hover { color: #95604A; }
+  .sb::-webkit-scrollbar { width:8px; }
+  .sb::-webkit-scrollbar-thumb { background:rgba(90,88,84,.22); border-radius:99px; }
+  .sb::-webkit-scrollbar-track { background:transparent; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:.9 } }
+  @keyframes omPop { 0% { transform:scale(.6); opacity:0 } 60% { transform:scale(1.06); opacity:1 } 100% { transform:scale(1) } }
+  @keyframes omGrow { from { transform:scaleX(.14) } to { transform:scaleX(1) } }
+  @keyframes omRise { from { opacity:0; transform:translateY(5px) } to { opacity:1; transform:none } }
+  .om-pop { animation: omPop 340ms var(--ease) both 80ms }
+  .om-grow { animation: omGrow 760ms var(--ease) both 140ms }
+  .om-rise { animation: omRise 300ms var(--ease) both 420ms }
+  @keyframes twinkle { 0%,100% { opacity:0; transform:scale(.3) rotate(0deg) } 45% { opacity:1; transform:scale(1) rotate(25deg) } }
+  @keyframes sheen { 0% { transform:translateX(-130%) skewX(-18deg) } 55%,100% { transform:translateX(260%) skewX(-18deg) } }
+  @keyframes floatUp { from { opacity:0; transform:translateY(9px) } to { opacity:1; transform:none } }
+  @keyframes hintBreathe { 0%,100% { opacity:.55 } 50% { opacity:.95 } }
+  @media (prefers-reduced-motion: reduce) { .om-pop, .om-grow, .om-rise { animation:none } }
+</style>
+</helmet>
+<div class="{{ themeClass }}" style="--accent:#95604A; --accent-weak:#EFE6E1; min-height:100vh; background:var(--paper); padding:44px 48px 64px; box-sizing:border-box; display:flex; flex-direction:column; gap:28px">
+
+  <div style="display:flex; flex-direction:column; gap:6px">
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">WD-40 · menu bar · redesign</div>
+    <div style="font-size:26px; font-weight:600; letter-spacing:-.018em; color:var(--ink)">Reclaim disk from build artifacts</div>
+    <div style="font-size:14px; color:var(--ink-2); max-width:62ch">Four states of the 380pt popover: what was found, cleaning, the result, and settings. Rust targets, Xcode caches, Docker layers and node_modules are scanned as separate groups; recent builds are flagged and excluded by default so nothing you are still working on disappears.</div>
+  </div>
+
+  <div style="display:flex; gap:34px; align-items:flex-start; flex-wrap:wrap">
+
+    <!-- ═══ 01 SCAN RESULTS ═══ -->
+    <div style="display:flex; flex-direction:column; gap:10px">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">01 · scan results</div>
+      <div style="width:380px; background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 44px rgba(28,26,22,.13); overflow:hidden; display:flex; flex-direction:column">
+
+        <div style="padding:14px 16px 13px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--line)">
+          <div style="display:flex; align-items:baseline; justify-content:space-between">
+            <div style="font-size:20px; font-weight:600; letter-spacing:-.014em; color:var(--ink)">12.7 GB free</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">of 228.3 GB</div>
+          </div>
+          <div style="display:flex; height:11px; border-radius:3px; overflow:hidden">
+            <div style="flex:1; background:var(--ink-4); "></div>
+            <div style="width:14.8%; background:var(--accent)"></div>
+            <div style="width:5.6%; background:rgba(94,114,87,.26); box-shadow:inset 1px 0 0 rgba(94,114,87,.55)"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(3, auto); justify-content:space-between; align-items:center; gap:0 10px">
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--accent)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">Reclaimable</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">82.8G</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--ink-4)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">In use</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">132.8G</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="width:8px; height:8px; border-radius:2px; background:var(--pos)"></span>
+              <span style="font-size:12.5px; color:var(--ink)">Free</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">12.7G</span>
+            </div>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">&rarr; 71.8 GB free after cleaning</div>
+        </div>
+
+        <div class="sb" style="max-height:392px; overflow-y:auto">
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; gap:8px; padding:12px 16px 6px">
+              <i data-lucide="{{ g.icon }}" style="flex:none; width:15px; height:15px; color:var(--ink-3); stroke-width:1.7"></i>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">{{ g.label }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-3); background:var(--surface-2); border-radius:4px; padding:1px 5px">{{ g.count }}</span>
+              <span style="flex:1"></span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">{{ g.total }}</span>
+            </div>
+            <sc-for list="{{ g.items }}" as="r" hint-placeholder-count="4">
+              <div onClick="{{ r.toggle }}" style="position:relative; display:flex; align-items:center; gap:10px; padding:7px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+                <div style="position:absolute; left:0; top:4px; bottom:4px; background:rgba(149,96,74,.09); width:{{ r.pct }}"></div>
+                <sc-if value="{{ r.on }}" hint-placeholder-val="{{ true }}">
+                  <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; background:var(--ink); display:flex; align-items:center; justify-content:center">
+                    <i data-lucide="check" style="width:11px; height:11px; color:var(--surface); stroke-width:2.6"></i>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ r.off }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:relative; flex:none; width:15px; height:15px; border-radius:4px; border:1px solid var(--line-2); background:var(--surface)"></div>
+                </sc-if>
+                <div style="position:relative; flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
+                  <div style="font-size:13.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ r.name }}</div>
+                  <div style="display:flex; align-items:center; gap:6px">
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">{{ r.meta }}</span>
+                    <sc-if value="{{ r.recent }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#9A7B43; border:1px solid rgba(154,123,67,.35); border-radius:3px; padding:0 4px">recent</span>
+                    </sc-if>
+                  </div>
+                </div>
+                <div style="position:relative; font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums">{{ r.size }}</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ g.hasMore }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:6px 16px 12px">
+                <span style="font-size:12.5px; color:var(--ink-2); border-bottom:1px solid var(--line-2); cursor:pointer">{{ g.more }}</span>
+              </div>
+            </sc-if>
+            <div style="height:1px; background:var(--line); margin:6px 16px 0"></div>
+          </sc-for>
+          <div style="height:10px"></div>
+        </div>
+
+
+        <div style="border-top:1px solid var(--line); padding:12px 16px 13px; display:flex; flex-direction:column; gap:9px; background:var(--surface)">
+          <div onClick="{{ noop }}" style="display:flex; align-items:center; justify-content:center; gap:8px; height:34px; border-radius:8px; background:var(--ink); cursor:pointer" style-hover="background:#000">
+            <i data-lucide="trash-2" style="width:14px; height:14px; color:var(--surface); stroke-width:1.7"></i>
+            <span style="font-size:13.5px; font-weight:500; color:var(--surface)">Clean {{ selCount }} selected</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--surface); opacity:.62">{{ selSize }}</span>
+          </div>
+          <div style="font-size:11.5px; line-height:1.45; color:var(--ink-3)">2 recent builds excluded. Everything here is regenerated by your next build; sizes overlap where builds share APFS clones.</div>
+          <div style="display:flex; align-items:center; gap:14px; padding-top:2px">
+            <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Rescan</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-4)">&#8984;R</span>
+            <span style="flex:1"></span>
+            <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Settings</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-4)">&#8984;,</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ 02 SPRAY MACHINE ═══ -->
+    <div style="display:flex; flex-direction:column; gap:10px">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">02 · de-rusting · interactive</div>
+      <div style="width:380px; background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 44px rgba(28,26,22,.13); overflow:hidden; display:flex; flex-direction:column">
+
+        <div style="padding:14px 16px 13px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--line)">
+          <div style="display:flex; align-items:baseline; justify-content:space-between">
+            <div style="display:flex; align-items:baseline; gap:7px">
+              <div style="font-size:22px; font-weight:600; letter-spacing:-.016em; color:var(--ink); font-variant-numeric:tabular-nums">{{ freedLabel }}</div>
+              <div style="font-size:13.5px; color:var(--ink-2)">freed</div>
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">{{ doneLabel }}</div>
+          </div>
+          <div style="position:relative; height:11px; border-radius:3px; overflow:hidden; background:var(--ink-4)">
+            <div style="position:absolute; inset:0 auto 0 0; width:{{ pctLabel }}; background:rgba(94,114,87,.32); box-shadow:inset -1px 0 0 rgba(94,114,87,.7); transition:width 120ms linear"></div>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between">
+            <div style="font-size:13px; color:var(--ink)">{{ statusLine }}</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">{{ etaLabel }}</div>
+          </div>
+        </div>
+
+        <div style="padding:14px 16px 12px; display:flex; flex-direction:column; gap:9px">
+          <div ref="{{ plateRef }}" style="position:relative; height:198px; border-radius:10px; overflow:hidden; touch-action:none; cursor:{{ plateCursor }}; background:linear-gradient(135deg,#D9DBDE 0%,#F3F4F6 26%,#C4C7CC 52%,#EEEFF1 74%,#CFD2D6 100%); box-shadow:inset 0 0 0 1px rgba(28,26,22,.14)">
+            <div style="position:absolute; left:50%; top:50%; width:168px; height:168px; margin:-84px 0 0 -84px; border-radius:99px; background:repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.55) 0 1px, rgba(28,26,22,.055) 1px 5px); box-shadow:inset 0 0 0 1px rgba(28,26,22,.1), 0 1px 6px rgba(28,26,22,.12)"></div>
+            <div style="position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px; border-radius:99px; background:linear-gradient(140deg,#EDEEF0,#B9BCC1); box-shadow:inset 0 0 0 1px rgba(28,26,22,.16)"></div>
+            <div style="position:absolute; left:50%; top:50%; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; border-radius:99px; background:#8E9297"></div>
+
+            <sc-if value="{{ celebrate }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; inset:0; overflow:hidden; pointer-events:none">
+                <div style="position:absolute; top:0; bottom:0; left:0; width:64px; background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.85),rgba(255,255,255,0)); animation:sheen 2.4s var(--ease) infinite"></div>
+                <span style="position:absolute; left:19%; top:24%; width:16px; height:16px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 1.7s var(--ease) infinite"></span>
+                <span style="position:absolute; left:74%; top:18%; width:22px; height:22px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 2.1s var(--ease) infinite 300ms"></span>
+                <span style="position:absolute; left:44%; top:62%; width:13px; height:13px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 1.9s var(--ease) infinite 700ms"></span>
+                <span style="position:absolute; left:86%; top:70%; width:15px; height:15px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 1.6s var(--ease) infinite 1100ms"></span>
+                <span style="position:absolute; left:9%; top:74%; width:12px; height:12px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 2.3s var(--ease) infinite 500ms"></span>
+                <span style="position:absolute; left:58%; top:36%; width:10px; height:10px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 1.5s var(--ease) infinite 1400ms"></span>
+              </div>
+            </sc-if>
+
+            <canvas ref="{{ rustRef }}" style="position:absolute; inset:0; width:100%; height:100%"></canvas>
+            <canvas ref="{{ mistRef }}" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none"></canvas>
+
+            <sc-if value="{{ notStarted }}" hint-placeholder-val="{{ true }}">
+              <div style="position:absolute; left:0; right:0; bottom:12px; display:flex; justify-content:center; pointer-events:none">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#F7F1EC; background:rgba(28,26,22,.5); padding:5px 9px; border-radius:99px; animation:hintBreathe 2.2s var(--ease) infinite">press &amp; drag to spray</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ celebrate }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; left:0; right:0; bottom:12px; display:flex; justify-content:center; pointer-events:none">
+                <div class="om-pop" style="display:flex; align-items:center; gap:7px; background:rgba(28,26,22,.62); border-radius:99px; padding:6px 12px">
+                  <i data-lucide="sparkles" style="width:14px; height:14px; color:#F7F1EC; stroke-width:1.7"></i>
+                  <span style="font-size:12.5px; color:#F7F1EC">Spotless</span>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ sprayable }}" hint-placeholder-val="{{ true }}">
+              <div ref="{{ nozzleRef }}" style="position:absolute; left:0; top:0; width:0; height:0; pointer-events:none; will-change:transform">
+                <div ref="{{ coneRef }}" style="position:absolute; left:-26px; top:-26px; width:52px; height:52px; border-radius:99px; background:radial-gradient(circle at 50% 50%, rgba(255,255,255,.9), rgba(255,255,255,.18) 55%, rgba(255,255,255,0) 78%); opacity:0; transition:opacity 90ms linear"></div>
+                <div style="position:absolute; left:6px; top:-58px; transform:rotate(24deg); transform-origin:0 100%">
+                  <div style="position:absolute; left:6px; top:44px; width:5px; height:9px; background:#3A3733; border-radius:0 0 2px 2px"></div>
+                  <div style="width:24px; height:44px; border-radius:5px 5px 4px 4px; background:linear-gradient(100deg,#2A2825,#4A4742 46%,#1F1D1B); box-shadow:0 3px 10px rgba(28,26,22,.4); display:flex; align-items:flex-end; justify-content:center; padding-bottom:5px; box-sizing:border-box">
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:9px; color:#F0EBE6">40</span>
+                  </div>
+                  <div style="position:absolute; left:5px; top:-7px; width:14px; height:8px; border-radius:3px 3px 1px 1px; background:#5B5751"></div>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:8px; min-height:19px">
+            <sc-if value="{{ hasHover }}" hint-placeholder-val="{{ false }}">
+              <span style="width:8px; height:8px; border-radius:2px; background:#8B5533; flex:none"></span>
+              <span style="font-size:12.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ hoverName }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-2)">{{ hoverSize }}</span>
+              <span style="flex:1"></span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">{{ hoverPctLabel }}</span>
+            </sc-if>
+            <sc-if value="{{ noHover }}" hint-placeholder-val="{{ true }}">
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3)">{{ legendLabel }}</span>
+            </sc-if>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:8px">
+            <div onClick="{{ autoSpray }}" style="flex:1; display:flex; align-items:center; justify-content:center; gap:7px; height:32px; border-radius:8px; background:var(--ink); cursor:pointer" style-hover="background:#000">
+              <i data-lucide="spray-can" style="width:14px; height:14px; color:var(--surface); stroke-width:1.7"></i>
+              <span style="font-size:13px; font-weight:500; color:var(--surface)">Auto-spray the rest</span>
+            </div>
+            <div onClick="{{ reset }}" style="flex:none; display:flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; background:var(--surface-2); border:1px solid var(--line); cursor:pointer" style-hover="background:var(--surface-3)">
+              <i data-lucide="rotate-ccw" style="width:13px; height:13px; color:var(--ink); stroke-width:1.7"></i>
+              <span style="font-size:13px; color:var(--ink)">Re-rust</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:10px 16px 9px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:3px">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">{{ removingLabel }}</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ removingPath }}</div>
+        </div>
+
+        <div class="sb" style="max-height:196px; overflow-y:auto; padding:8px 0">
+          <sc-for list="{{ progress }}" as="p" hint-placeholder-count="8">
+            <div style="display:flex; align-items:center; gap:10px; padding:7px 16px">
+              <sc-if value="{{ p.done }}" hint-placeholder-val="{{ true }}">
+                <i data-lucide="check" style="flex:none; width:15px; height:15px; color:var(--pos); stroke-width:1.7"></i>
+              </sc-if>
+              <sc-if value="{{ p.active }}" hint-placeholder-val="{{ false }}">
+                <svg style="flex:none; animation:spin 900ms linear infinite" width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--line-2)" stroke-width="1.7"></circle><path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round"></path></svg>
+              </sc-if>
+              <sc-if value="{{ p.pending }}" hint-placeholder-val="{{ false }}">
+                <div style="flex:none; width:15px; height:15px; display:flex; align-items:center; justify-content:center"><span style="width:5px; height:5px; border-radius:99px; background:var(--ink-4)"></span></div>
+              </sc-if>
+              <div style="flex:1; min-width:0; font-size:13.5px; color:{{ p.color }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ p.name }}</div>
+              <sc-if value="{{ p.showPct }}" hint-placeholder-val="{{ false }}">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--accent); background:rgba(149,96,74,.1); border-radius:4px; padding:1px 5px; font-variant-numeric:tabular-nums">{{ p.pct }}</div>
+              </sc-if>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:{{ p.color }}; text-decoration:{{ p.strike }}; font-variant-numeric:tabular-nums">{{ p.size }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="border-top:1px solid var(--line); padding:12px 16px 13px; display:flex; flex-direction:column; gap:9px">
+          <div style="font-size:11.5px; line-height:1.45; color:var(--ink-3)">Spraying erases the crust under the nozzle. Already-removed directories stay removed; nothing goes to the Trash.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ 03 DONE ═══ -->
+    <div style="display:flex; flex-direction:column; gap:10px">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">03 · done</div>
+      <div style="width:380px; background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 44px rgba(28,26,22,.13); overflow:hidden; display:flex; flex-direction:column">
+
+        <sc-if value="{{ locked }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:46px 26px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center">
+            <div style="width:74px; height:74px; border-radius:99px; border:1px dashed var(--line-2); display:flex; align-items:center; justify-content:center">
+              <i data-lucide="hard-drive" style="width:26px; height:26px; color:var(--ink-4); stroke-width:1.6"></i>
+            </div>
+            <div style="font-size:14.5px; color:var(--ink-2); max-width:26ch; text-wrap:pretty">Spray the plate clean and the result lands here.</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-4)">{{ pctLabel }} de-rusted</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ celebrate }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 16px 20px; display:flex; flex-direction:column; gap:14px; border-bottom:1px solid var(--line); background:radial-gradient(120% 90% at 50% -10%, rgba(94,114,87,.13), rgba(94,114,87,0) 70%)">
+            <div style="position:relative; align-self:center; width:96px; height:96px; border-radius:99px; overflow:hidden; background:repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.6) 0 1px, rgba(28,26,22,.06) 1px 5px); box-shadow:inset 0 0 0 1px rgba(28,26,22,.1), 0 2px 14px rgba(28,26,22,.14)">
+              <div style="position:absolute; left:50%; top:50%; width:26px; height:26px; margin:-13px 0 0 -13px; border-radius:99px; background:linear-gradient(140deg,#EDEEF0,#BABDC2); box-shadow:inset 0 0 0 1px rgba(28,26,22,.16)"></div>
+              <div style="position:absolute; top:0; bottom:0; left:0; width:38px; background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.9),rgba(255,255,255,0)); animation:sheen 2.6s var(--ease) infinite"></div>
+              <span style="position:absolute; left:14%; top:20%; width:16px; height:16px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 1.8s var(--ease) infinite"></span>
+              <span style="position:absolute; left:66%; top:58%; width:13px; height:13px; background:#fff; clip-path:polygon(50% 0,57% 43%,100% 50%,57% 57%,50% 100%,43% 57%,0 50%,43% 43%); animation:twinkle 2.2s var(--ease) infinite 600ms"></span>
+            </div>
+            <div class="om-pop" style="display:flex; flex-direction:column; align-items:center; gap:4px">
+              <div style="display:flex; align-items:baseline; gap:8px">
+                <div style="font-size:34px; font-weight:600; letter-spacing:-.022em; color:var(--ink); font-variant-numeric:tabular-nums">+59.1 GB</div>
+              </div>
+              <div style="font-size:14px; color:var(--ink-2)">of space back, in 48s</div>
+            </div>
+            <div style="display:flex; height:11px; border-radius:3px; overflow:hidden">
+              <div style="width:68.6%; background:var(--ink-4)"></div>
+              <div class="om-grow" style="flex:1; background:rgba(94,114,87,.26); box-shadow:inset 1px 0 0 rgba(94,114,87,.55); transform-origin:left center"></div>
+            </div>
+            <div style="display:flex; align-items:baseline; justify-content:space-between">
+              <div style="font-size:13px; color:var(--ink)">71.8 GB free</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-3)">was 12.7 GB</div>
+            </div>
+          </div>
+
+          <div class="om-rise" style="padding:6px 0 4px">
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">11</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">Rust targets</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">29.1 GB</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">4</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">Xcode caches</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">18.2 GB</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">1</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">Docker images</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">8.4 GB</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">3</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">node_modules</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">3.4 GB</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-2)">3</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">Build output</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink)">6.3 MB</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; padding:9px 16px">
+              <div style="flex:none; width:22px; height:22px; border-radius:6px; background:rgba(154,123,67,.12); display:flex; align-items:center; justify-content:center"><span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#9A7B43">2</span></div>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">Skipped &mdash; built in the last 3 days</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink-3)">19.3 GB</div>
+            </div>
+          </div>
+
+          <div style="margin:6px 16px 0; padding:11px 12px; border:1px solid var(--line); border-radius:8px; background:var(--paper)">
+            <div style="font-size:12px; line-height:1.5; color:var(--ink-2)">Rebuilding everything costs roughly <span style="color:var(--ink)">34 min</span> of compile time. Cargo registry, pnpm store and in-use Docker layers were left untouched.</div>
+          </div>
+
+          <div style="border-top:1px solid var(--line); margin-top:16px; padding:12px 16px 13px; display:flex; flex-direction:column; gap:9px">
+            <div onClick="{{ reset }}" style="display:flex; align-items:center; justify-content:center; height:34px; border-radius:8px; background:var(--ink); cursor:pointer" style-hover="background:#000">
+              <span style="font-size:13.5px; font-weight:500; color:var(--surface)">Done</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:14px">
+              <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Copy log</span>
+              <span style="flex:1"></span>
+              <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Clean skipped target too</span>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- ═══ 04 SETTINGS ═══ -->
+    <div style="display:flex; flex-direction:column; gap:10px">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)">04 · settings</div>
+      <div style="width:380px; background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 44px rgba(28,26,22,.13); overflow:hidden; display:flex; flex-direction:column">
+
+        <div style="padding:14px 16px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:11px">
+          <div style="flex:none; width:30px; height:30px; border-radius:8px; background:var(--ink); display:flex; align-items:center; justify-content:center">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:500; color:var(--surface)">40</span>
+          </div>
+          <div style="flex:1; display:flex; flex-direction:column; gap:1px">
+            <div style="font-size:14.5px; font-weight:500; color:var(--ink)">WD-40</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">v0.5.0 &middot; up to date</div>
+          </div>
+        </div>
+
+        <div class="sb" style="max-height:498px; overflow-y:auto">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:14px 16px 6px">scanning</div>
+          <sc-for list="{{ scanRows }}" as="s" hint-placeholder-count="4">
+            <div onClick="{{ s.toggle }}" style="display:flex; align-items:center; gap:12px; min-height:38px; padding:8px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+              <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
+                <div style="font-size:13.5px; color:var(--ink)">{{ s.label }}</div>
+                <sc-if value="{{ s.hasHint }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:11.5px; color:var(--ink-3)">{{ s.hint }}</div>
+                </sc-if>
+              </div>
+              <sc-if value="{{ s.isSwitch }}" hint-placeholder-val="{{ true }}">
+                <div style="flex:none; width:38px; height:22px; border-radius:99px; padding:2px; box-sizing:border-box; background:{{ s.trackBg }}; transition:background var(--dur) var(--ease); display:flex; justify-content:{{ s.knobPos }}">
+                  <div style="width:18px; height:18px; border-radius:99px; background:var(--surface); box-shadow:0 1px 2px rgba(28,26,22,.25)"></div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ s.isValue }}" hint-placeholder-val="{{ false }}">
+                <div style="flex:none; display:flex; align-items:center; gap:5px">
+                  <span style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-2)">{{ s.value }}</span>
+                  <i data-lucide="chevron-right" style="width:13px; height:13px; color:var(--ink-4); stroke-width:1.7"></i>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+
+          <div style="height:1px; background:var(--line); margin:8px 16px 0"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:14px 16px 6px">what to scan</div>
+          <sc-for list="{{ typeRows }}" as="t" hint-placeholder-count="5">
+            <div onClick="{{ t.toggle }}" style="display:flex; align-items:center; gap:11px; min-height:38px; padding:8px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+              <i data-lucide="{{ t.icon }}" style="flex:none; width:15px; height:15px; color:var(--ink-3); stroke-width:1.7"></i>
+              <div style="flex:1; font-size:13.5px; color:var(--ink)">{{ t.label }}</div>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-3)">{{ t.size }}</span>
+              <div style="flex:none; width:38px; height:22px; border-radius:99px; padding:2px; box-sizing:border-box; background:{{ t.trackBg }}; transition:background var(--dur) var(--ease); display:flex; justify-content:{{ t.knobPos }}">
+                <div style="width:18px; height:18px; border-radius:99px; background:var(--surface); box-shadow:0 1px 2px rgba(28,26,22,.25)"></div>
+              </div>
+            </div>
+          </sc-for>
+
+          <div style="height:1px; background:var(--line); margin:8px 16px 0"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:14px 16px 6px">safety</div>
+
+          <div style="padding:2px 16px 10px; display:flex; flex-direction:column; gap:9px">
+            <div style="display:flex; align-items:baseline; justify-content:space-between">
+              <div style="font-size:13.5px; color:var(--ink)">Keep builds newer than</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink)">{{ keepDaysLabel }}</div>
+            </div>
+            <div onClick="{{ noop }}" style="position:relative; height:22px; display:flex; align-items:center">
+              <div style="position:absolute; left:0; right:0; height:3px; border-radius:99px; background:var(--surface-2)"></div>
+              <div style="position:absolute; left:0; height:3px; border-radius:99px; background:var(--ink); width:{{ keepPct }}"></div>
+              <div style="position:absolute; left:{{ keepPct }}; transform:translateX(-50%); width:16px; height:16px; border-radius:99px; background:var(--surface); border:1px solid var(--line-2); box-shadow:0 1px 3px rgba(28,26,22,.18)"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between">
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-4)">0d</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-4)">30d</span>
+            </div>
+          </div>
+
+          <sc-for list="{{ safetyRows }}" as="s" hint-placeholder-count="2">
+            <div onClick="{{ s.toggle }}" style="display:flex; align-items:center; gap:12px; min-height:38px; padding:8px 16px; cursor:pointer" style-hover="background:var(--surface-2)">
+              <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px">
+                <div style="font-size:13.5px; color:var(--ink)">{{ s.label }}</div>
+                <sc-if value="{{ s.hasHint }}" hint-placeholder-val="{{ true }}">
+                  <div style="font-size:11.5px; color:var(--ink-3)">{{ s.hint }}</div>
+                </sc-if>
+              </div>
+              <div style="flex:none; width:38px; height:22px; border-radius:99px; padding:2px; box-sizing:border-box; background:{{ s.trackBg }}; transition:background var(--dur) var(--ease); display:flex; justify-content:{{ s.knobPos }}">
+                <div style="width:18px; height:18px; border-radius:99px; background:var(--surface); box-shadow:0 1px 2px rgba(28,26,22,.25)"></div>
+              </div>
+            </div>
+          </sc-for>
+
+          <div style="height:1px; background:var(--line); margin:8px 16px 0"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); padding:14px 16px 6px">roots</div>
+          <div style="padding:0 16px 4px; display:flex; flex-direction:column; gap:6px">
+            <div style="display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--line); border-radius:7px">
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); flex:1">~/dev</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">19 targets</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--line); border-radius:7px">
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); flex:1">~/work/arb</span>
+              <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-3)">3 targets</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; padding:4px 2px; cursor:pointer">
+              <i data-lucide="plus" style="width:13px; height:13px; color:var(--ink-2); stroke-width:1.7"></i>
+              <span style="font-size:12.5px; color:var(--ink-2)">Add folder&hellip;</span>
+            </div>
+          </div>
+          <div style="height:10px"></div>
+        </div>
+
+        <div style="border-top:1px solid var(--line); padding:10px 16px 11px; display:flex; align-items:center; gap:14px">
+          <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Scan Rules</span>
+          <i data-lucide="chevron-right" style="width:13px; height:13px; color:var(--ink-4); stroke-width:1.7"></i>
+          <span style="flex:1"></span>
+          <span style="font-size:12.5px; color:var(--ink-2); cursor:pointer">Quit</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-4)">&#8984;Q</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light' | 'dark'&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;showSizeBars&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;selectionMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;item&quot;,&quot;group&quot;],&quot;default&quot;:&quot;item&quot;,&quot;tsType&quot;:&quot;'item' | 'group'&quot;,&quot;section&quot;:&quot;Behavior&quot;},&quot;keepDays&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:3,&quot;min&quot;:0,&quot;max&quot;:30,&quot;unit&quot;:&quot;d&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
+// Lucide names — the design system's documented web stand-in for SF Symbols
+const ICON = { rust: 'box', xcode: 'hammer', docker: 'container', node: 'package', build: 'wrench' };
+
+const GROUPS = [
+  { key: 'rust', label: 'rust targets', icon: 'rust', count: 19, total: '33.9 GB', more: 'Show 7 smaller targets · 1.4 GB', items: [
+    ['arbdiag', 'tmp-target', 5.6, '5.6 GB', 12],
+    ['aid-qwen', 'tmp-target', 5.3, '5.3 GB', 9],
+    ['aid-cmd', 'tmp-target', 4.3, '4.3 GB', 21],
+    ['ai-dispatch/feat-advise-inventory', 'target', 3.4, '3.4 GB', 5],
+    ['ai-dispatch/feat-qwen-adapter', 'target', 3.1, '3.1 GB', 2],
+    ['ai-dispatch/fix-adapter-completion-status', 'target', 2.3, '2.3 GB', 18],
+    ['arbaudit', 'tmp-target', 2.1, '2.1 GB', 30],
+    ['713-release', 'tmp-target', 1.3, '1.3 GB', 44],
+    ['aid-advise', 'tmp-target', 1.3, '1.3 GB', 16],
+    ['713diag', 'tmp-target', 1.3, '1.3 GB', 52],
+    ['713-audit', 'tmp-target', 1.2, '1.2 GB', 52],
+    ['aid-merged', 'tmp-target', 0.97, '992.8 MB', 7],
+  ] },
+  { key: 'xcode', label: 'xcode', icon: 'xcode', count: 4, total: '18.2 GB', items: [
+    ['DerivedData', '14 projects', 11.4, '11.4 GB', 6],
+    ['iOS DeviceSupport', '9 versions', 4.1, '4.1 GB', 22],
+    ['Archives', '6 builds', 1.9, '1.9 GB', 41],
+    ['Simulator caches', 'CoreSimulator', 0.813, '832.5 MB', 9],
+  ] },
+  { key: 'docker', label: 'docker', icon: 'docker', count: 2, total: '24.6 GB', items: [
+    ['Build cache', 'buildkit', 16.2, '16.2 GB', 1],
+    ['Dangling images', '23 layers', 8.4, '8.4 GB', 15],
+  ] },
+  { key: 'node', label: 'node_modules', icon: 'node', count: 12, total: '6.1 GB', more: 'Show 9 more · 2.7 GB', items: [
+    ['aid-web', 'node_modules', 1.4, '1.4 GB', 8],
+    ['dashboard', 'node_modules', 1.1, '1.1 GB', 13],
+    ['docs-site', 'node_modules', 0.893, '914.4 MB', 26],
+  ] },
+  { key: 'build', label: 'build output', icon: 'build', count: 3, total: '6.3 MB', items: [
+    ['wd-40', 'dist', 0.0054, '5.4 MB', 4],
+    ['web', 'dist', 0.00044, '448 KB', 11],
+    ['dashboard', 'dist', 0.00042, '432 KB', 11],
+  ] },
+];
+
+const PROGRESS = [
+  ['arbdiag', '5.6 GB', 5.6],
+  ['aid-qwen', '5.3 GB', 5.3],
+  ['aid-cmd', '4.3 GB', 4.3],
+  ['Dangling images', '8.4 GB', 8.4],
+  ['DerivedData', '11.4 GB', 11.4],
+  ['iOS DeviceSupport', '4.1 GB', 4.1],
+  ['ai-dispatch/feat-advise-inventory', '3.4 GB', 3.4],
+  ['ai-dispatch/fix-adapter-completion-status', '2.3 GB', 2.3],
+  ['arbaudit', '2.1 GB', 2.1],
+  ['Archives', '1.9 GB', 1.9],
+  ['aid-web/node_modules', '1.4 GB', 1.4],
+  ['dashboard/node_modules', '1.1 GB', 1.1],
+  ['Simulator caches', '832.5 MB', 0.813],
+  ['docs-site/node_modules', '914.4 MB', 0.893],
+];
+const PATHS = {
+  'arbdiag': '…/dev/arbdiag/tmp-target/',
+  'aid-qwen': '…/dev/aid-qwen/tmp-target/',
+  'aid-cmd': '…/dev/aid-cmd/tmp-target/',
+  'Dangling images': '/var/lib/docker/overlay2/ (23 layers)',
+  'DerivedData': '…/Developer/Xcode/DerivedData/aid-web-fbqz/',
+  'iOS DeviceSupport': '…/Developer/Xcode/iOS DeviceSupport/17.4/',
+};
+const PTOTAL = PROGRESS.reduce(function (a, p) { return a + p[2]; }, 0);
+const GX = 48, GY = 27;
+
+const FREED = 59.1;
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const keep = props.keepDays != null ? props.keepDays : 3;
+    const off = {};
+    GROUPS.forEach(function (g) { g.items.forEach(function (r) { if (r[4] <= keep) off[g.key + '/' + r[0]] = true; }); });
+    this.state = {
+      off: off,
+      coverage: 0, done: false, started: false, tiles: [], hover: -1,
+      scan: { wake: true, deep: false },
+      safety: { confirm: true, node: false },
+      types: { rust: true, xcode: true, docker: true, node: true, build: true },
+    };
+    this.rustRef = React.createRef();
+    this.mistRef = React.createRef();
+    this.plateRef = React.createRef();
+    this.nozzleRef = React.createRef();
+    this.coneRef = React.createRef();
+    this.mist = [];
+    this.onDown = this.onDown.bind(this);
+    this.onMove = this.onMove.bind(this);
+    this.onUp = this.onUp.bind(this);
+    this.autoSpray = this.autoSpray.bind(this);
+    this.reset = this.reset.bind(this);
+  }
+
+  drawIcons() { if (window.lucide) window.lucide.createIcons(); }
+  componentDidUpdate() { this.drawIcons(); }
+
+  componentDidMount() {
+    this.drawIcons();
+    this.paintRust();
+    const p = this.plateRef.current;
+    if (p) {
+      p.addEventListener('pointerdown', this.onDown);
+      p.addEventListener('pointermove', this.onMove);
+      p.addEventListener('pointerup', this.onUp);
+      p.addEventListener('pointercancel', this.onUp);
+      p.addEventListener('pointerleave', this.onUp);
+    }
+    this.loop();
+  }
+
+  componentWillUnmount() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._auto) cancelAnimationFrame(this._auto);
+    const p = this.plateRef.current;
+    if (p) {
+      p.removeEventListener('pointerdown', this.onDown);
+      p.removeEventListener('pointermove', this.onMove);
+      p.removeEventListener('pointerup', this.onUp);
+      p.removeEventListener('pointercancel', this.onUp);
+      p.removeEventListener('pointerleave', this.onUp);
+    }
+  }
+
+  /* ---------- the rust crust: a treemap of what is being removed ---------- */
+  layout() {
+    // squarified treemap over the plate, one tile per target
+    const items = PROGRESS.map(function (p, i) { return { i: i, name: p[0], size: p[1], gb: p[2] }; });
+    const tiles = [];
+    const self = this;
+    const worst = function (row, w, scale) {
+      const s = row.reduce(function (a, r) { return a + r.gb; }, 0) * scale;
+      let mx = 0, mn = Infinity;
+      row.forEach(function (r) { const v = r.gb * scale; if (v > mx) mx = v; if (v < mn) mn = v; });
+      return Math.max((w * w * mx) / (s * s), (s * s) / (w * w * mn));
+    };
+    const place = function (row, rect, scale, vertical) {
+      const s = row.reduce(function (a, r) { return a + r.gb; }, 0) * scale;
+      let off = 0;
+      const thick = s / (vertical ? rect.h : rect.w);
+      row.forEach(function (r) {
+        const len = (r.gb * scale) / thick;
+        tiles.push(vertical
+          ? { i: r.i, name: r.name, size: r.size, gb: r.gb, x: rect.x, y: rect.y + off, w: thick, h: len }
+          : { i: r.i, name: r.name, size: r.size, gb: r.gb, x: rect.x + off, y: rect.y, w: len, h: thick });
+        off += len;
+      });
+      return vertical
+        ? { x: rect.x + thick, y: rect.y, w: rect.w - thick, h: rect.h }
+        : { x: rect.x, y: rect.y + thick, w: rect.w, h: rect.h - thick };
+    };
+    let rect = { x: 0, y: 0, w: this.cw, h: this.ch };
+    let rest = items.slice().sort(function (a, b) { return b.gb - a.gb; });
+    let row = [];
+    while (rest.length) {
+      const totalLeft = rest.concat(row).reduce(function (a, r) { return a + r.gb; }, 0);
+      const scale = (rect.w * rect.h) / totalLeft;
+      const vertical = rect.w >= rect.h;
+      const side = vertical ? rect.h : rect.w;
+      const next = rest[0];
+      if (row.length === 0 || worst(row.concat([next]), side, scale) <= worst(row, side, scale)) {
+        row.push(next); rest.shift();
+      } else {
+        rect = place(row, rect, scale, vertical); row = [];
+      }
+    }
+    if (row.length) {
+      const scale = (rect.w * rect.h) / row.reduce(function (a, r) { return a + r.gb; }, 0);
+      place(row, rect, scale, rect.w >= rect.h);
+    }
+    this.tiles = tiles.sort(function (a, b) { return a.i - b.i; });
+    // cell -> tile map
+    const cw = this.cw / GX, ch = this.ch / GY;
+    this.cellTile = new Int8Array(GX * GY).fill(-1);
+    this.tileCells = new Uint16Array(this.tiles.length);
+    for (let j = 0; j < GY; j++) for (let i = 0; i < GX; i++) {
+      const px = (i + 0.5) * cw, py = (j + 0.5) * ch;
+      for (let t = 0; t < this.tiles.length; t++) {
+        const T = this.tiles[t];
+        if (px >= T.x && px < T.x + T.w && py >= T.y && py < T.y + T.h) {
+          this.cellTile[j * GX + i] = t; this.tileCells[t]++; break;
+        }
+      }
+    }
+  }
+
+  paintRust() {
+    const c = this.rustRef.current, m = this.mistRef.current;
+    if (!c) return;
+    const d = Math.min(2, window.devicePixelRatio || 1);
+    const w = c.clientWidth || 348, h = c.clientHeight || 198;
+    this.cw = w; this.ch = h;
+    [c, m].forEach(function (cv) { if (cv) { cv.width = Math.round(w * d); cv.height = Math.round(h * d); } });
+    this.layout();
+    const x = c.getContext('2d');
+    x.setTransform(d, 0, 0, d, 0, 0);
+    x.globalCompositeOperation = 'source-over';
+    x.clearRect(0, 0, w, h);
+    const RUST = [['#8B5533', '#5E3821'], ['#7C4626', '#4E2E1B'], ['#95562E', '#63381F'], ['#A2603A', '#6B3D23']];
+    const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    this.tiles.forEach(function (T, idx) {
+      const pair = RUST[idx % RUST.length];
+      const g = x.createLinearGradient(T.x, T.y, T.x + T.w, T.y + T.h);
+      g.addColorStop(0, pair[0]); g.addColorStop(1, pair[1]);
+      x.fillStyle = g; x.fillRect(T.x, T.y, T.w, T.h);
+      // pitted rust texture inside the tile
+      x.save();
+      x.beginPath(); x.rect(T.x, T.y, T.w, T.h); x.clip();
+      const blobs = Math.max(6, Math.round((T.w * T.h) / 900));
+      for (let i = 0; i < blobs; i++) {
+        const cx = T.x + Math.random() * T.w, cy = T.y + Math.random() * T.h, r = 4 + Math.random() * 22;
+        const rg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+        rg.addColorStop(0, Math.random() > 0.5 ? '#C4874F' : '#4A2C1B');
+        rg.addColorStop(1, 'rgba(0,0,0,0)');
+        x.globalAlpha = 0.12 + Math.random() * 0.34;
+        x.fillStyle = rg; x.beginPath(); x.arc(cx, cy, r, 0, 6.2832); x.fill();
+      }
+      const dots = Math.max(20, Math.round((T.w * T.h) / 60));
+      for (let i = 0; i < dots; i++) {
+        x.globalAlpha = 0.07 + Math.random() * 0.26;
+        x.fillStyle = Math.random() > 0.5 ? '#3E2415' : '#D89A5E';
+        x.fillRect(T.x + Math.random() * T.w, T.y + Math.random() * T.h, 1 + Math.random() * 2, 1 + Math.random() * 2);
+      }
+      x.globalAlpha = 1;
+      x.restore();
+      // seam
+      x.strokeStyle = 'rgba(30,17,9,.55)'; x.lineWidth = 1;
+      x.strokeRect(T.x + 0.5, T.y + 0.5, T.w - 1, T.h - 1);
+      // label
+      if (T.w > 58 && T.h > 26) {
+        x.textBaseline = 'top';
+        x.fillStyle = 'rgba(255,240,228,.94)';
+        x.font = '600 10.5px ' + MONO;
+        let label = T.name;
+        const maxw = T.w - 12;
+        while (label.length > 4 && x.measureText(label).width > maxw) label = label.slice(0, -1);
+        if (label !== T.name) label = label.slice(0, -1) + '…';
+        x.fillText(label, T.x + 6, T.y + 6);
+        x.fillStyle = 'rgba(255,236,220,.72)';
+        x.font = '400 10px ' + MONO;
+        x.fillText(T.size, T.x + 6, T.y + 20);
+      } else if (T.w > 30 && T.h > 14) {
+        x.textBaseline = 'top';
+        x.fillStyle = 'rgba(255,238,224,.8)';
+        x.font = '400 9.5px ' + MONO;
+        x.fillText(T.size, T.x + 4, T.y + 4);
+      }
+    });
+    x.globalCompositeOperation = 'destination-out';
+    this.ctx = x;
+    this.cells = new Uint8Array(GX * GY);
+    this.hits = new Uint16Array(this.tiles.length);
+    this.hit = 0;
+    if (m) { const mx = m.getContext('2d'); mx.setTransform(d, 0, 0, d, 0, 0); mx.clearRect(0, 0, w, h); this.mctx = mx; }
+    this.mist = [];
+  }
+
+  markCells(x, y, r) {
+    const cw = this.cw / GX, ch = this.ch / GY;
+    const i0 = Math.max(0, Math.floor((x - r) / cw)), i1 = Math.min(GX - 1, Math.floor((x + r) / cw));
+    const j0 = Math.max(0, Math.floor((y - r) / ch)), j1 = Math.min(GY - 1, Math.floor((y + r) / ch));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const k = j * GX + i;
+      if (this.cells[k]) continue;
+      const dx = (i + 0.5) * cw - x, dy = (j + 0.5) * ch - y;
+      if (dx * dx + dy * dy <= r * r) {
+        this.cells[k] = 1; this.hit++;
+        const t = this.cellTile[k];
+        if (t >= 0) this.hits[t]++;
+      }
+    }
+  }
+
+  tileAt(x, y) {
+    if (!this.tiles) return -1;
+    for (let t = 0; t < this.tiles.length; t++) {
+      const T = this.tiles[t];
+      if (x >= T.x && x < T.x + T.w && y >= T.y && y < T.y + T.h) return t;
+    }
+    return -1;
+  }
+
+  tilePcts() {
+    const self = this;
+    if (!this.tiles) return [];
+    return this.tiles.map(function (T, t) {
+      const cells = self.tileCells[t] || 1;
+      return Math.min(1, (self.hits[t] || 0) / cells);
+    });
+  }
+
+  spray(x, y) {
+    if (!this.ctx) return;
+    const R = 22;
+    const g = this.ctx.createRadialGradient(x, y, 0, x, y, R);
+    g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.55, 'rgba(0,0,0,.9)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    this.ctx.fillStyle = g;
+    this.ctx.beginPath(); this.ctx.arc(x, y, R, 0, 6.2832); this.ctx.fill();
+    for (let i = 0; i < 7; i++) {
+      const a = Math.random() * 6.2832, d = R * (0.85 + Math.random() * 0.75), rr = 2 + Math.random() * 4;
+      this.ctx.globalAlpha = 0.45 + Math.random() * 0.5;
+      this.ctx.beginPath(); this.ctx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, rr, 0, 6.2832); this.ctx.fill();
+      this.ctx.globalAlpha = 1;
+    }
+    this.markCells(x, y, R * 0.85);
+  }
+
+  emit(x, y) {
+    for (let i = 0; i < 3; i++) {
+      const a = Math.random() * 6.2832;
+      this.mist.push({ x: x, y: y, vx: Math.cos(a) * (0.5 + Math.random() * 1.9), vy: Math.sin(a) * (0.5 + Math.random() * 1.9) + 0.35, r: 1 + Math.random() * 2.6, life: 1 });
+    }
+  }
+
+  sync(force) {
+    const pcts = this.tilePcts();
+    let gb = 0;
+    for (let t = 0; t < pcts.length; t++) gb += pcts[t] * this.tiles[t].gb;
+    const cov = gb / PTOTAL;
+    if (cov >= 0.955 && !this.state.done) return this.finish();
+    if (force || Math.round(cov * 200) !== Math.round(this.state.coverage * 200)) this.setState({ coverage: cov, tiles: pcts });
+  }
+
+  finish() {
+    if (this.ctx) this.ctx.clearRect(0, 0, this.cw, this.ch);
+    if (this.cells) { this.cells.fill(1); this.hit = GX * GY; }
+    if (this.hits) for (let t = 0; t < this.hits.length; t++) this.hits[t] = this.tileCells[t];
+    this.spraying = false;
+    this.setState({ coverage: 1, done: true, started: true, tiles: this.tilePcts(), hover: -1 });
+  }
+
+  loop() {
+    const self = this;
+    const step = function () {
+      if (self.spraying && self.last && !self.state.done) {
+        const j = 5;
+        self.spray(self.last.x + (Math.random() - 0.5) * j, self.last.y + (Math.random() - 0.5) * j);
+        self.emit(self.last.x, self.last.y);
+        self.sync();
+      }
+      const mx = self.mctx;
+      if (mx) {
+        mx.clearRect(0, 0, self.cw, self.ch);
+        for (let i = self.mist.length - 1; i >= 0; i--) {
+          const p = self.mist[i];
+          p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life -= 0.045;
+          if (p.life <= 0) { self.mist.splice(i, 1); continue; }
+          mx.globalAlpha = Math.max(0, p.life) * 0.75;
+          mx.fillStyle = '#FFFFFF';
+          mx.beginPath(); mx.arc(p.x, p.y, p.r, 0, 6.2832); mx.fill();
+        }
+        mx.globalAlpha = 1;
+      }
+      self._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+
+  moveNozzle(x, y) {
+    const n = this.nozzleRef.current;
+    if (n) n.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+  }
+
+  setCone(on) {
+    const c = this.coneRef.current;
+    if (c) c.style.opacity = on ? '1' : '0';
+  }
+
+  pt(e) {
+    const r = this.plateRef.current.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  onDown(e) {
+    if (this.state.done) return;
+    const p = this.pt(e);
+    if (this.plateRef.current.setPointerCapture) { try { this.plateRef.current.setPointerCapture(e.pointerId); } catch (err) {} }
+    this.spraying = true; this.last = p;
+    this.moveNozzle(p.x, p.y); this.setCone(true);
+    this.spray(p.x, p.y); this.emit(p.x, p.y);
+    if (!this.state.started) this.setState({ started: true });
+    this.sync(true);
+    e.preventDefault();
+  }
+
+  onMove(e) {
+    if (this.state.done) return;
+    const p = this.pt(e);
+    this.moveNozzle(p.x, p.y);
+    const t = this.tileAt(p.x, p.y);
+    if (t !== this.state.hover) this.setState({ hover: t });
+    if (!this.spraying) return;
+    const last = this.last || p;
+    const dx = p.x - last.x, dy = p.y - last.y, d = Math.sqrt(dx * dx + dy * dy);
+    const n = Math.max(1, Math.ceil(d / 8));
+    for (let i = 1; i <= n; i++) this.spray(last.x + dx * i / n, last.y + dy * i / n);
+    this.emit(p.x, p.y);
+    this.last = p;
+    this.sync();
+  }
+
+  onUp() { this.spraying = false; this.setCone(false); this.setState({ hover: -1 }); }
+
+  autoSpray() {
+    if (this.state.done || this._auto) return;
+    const self = this;
+    if (!this.state.started) this.setState({ started: true });
+    this.setCone(true);
+    const rows = 5, t0 = performance.now(), dur = 1500;
+    const path = function (t) {
+      const row = Math.min(rows - 1, Math.floor(t * rows));
+      const f = t * rows - row;
+      const y = 22 + row * ((self.ch - 44) / (rows - 1));
+      const x = row % 2 === 0 ? 20 + f * (self.cw - 40) : self.cw - 20 - f * (self.cw - 40);
+      return { x: x, y: y };
+    };
+    let prev = path(0);
+    const step = function (now) {
+      const t = Math.min(1, (now - t0) / dur);
+      const p = path(t);
+      const dx = p.x - prev.x, dy = p.y - prev.y, d = Math.sqrt(dx * dx + dy * dy);
+      const n = Math.max(1, Math.ceil(d / 9));
+      for (let i = 1; i <= n; i++) self.spray(prev.x + dx * i / n, prev.y + dy * i / n);
+      self.emit(p.x, p.y);
+      self.moveNozzle(p.x, p.y);
+      prev = p;
+      self.sync();
+      if (t < 1 && !self.state.done) { self._auto = requestAnimationFrame(step); }
+      else { self._auto = null; self.setCone(false); if (!self.state.done) self.finish(); }
+    };
+    this._auto = requestAnimationFrame(step);
+  }
+
+  reset() {
+    if (this._auto) { cancelAnimationFrame(this._auto); this._auto = null; }
+    this.spraying = false; this.last = null;
+    this.setCone(false);
+    this.setState({ coverage: 0, done: false, started: false, tiles: [], hover: -1 }, this.paintRust.bind(this));
+  }
+
+  fmt(gb) {
+    if (gb >= 1) return (Math.round(gb * 10) / 10).toFixed(1) + ' GB';
+    if (gb >= 0.001) return (Math.round(gb * 1024 * 10) / 10).toFixed(1) + ' MB';
+    return Math.round(gb * 1024 * 1024) + ' KB';
+  }
+
+  switchRow(group, key, label, hint) {
+    const self = this;
+    const on = this.state[group][key];
+    return {
+      label: label, hint: hint || '', hasHint: !!hint,
+      isSwitch: true, isValue: false, value: '',
+      trackBg: on ? 'var(--ink)' : 'var(--surface-3)',
+      knobPos: on ? 'flex-end' : 'flex-start',
+      toggle: function () {
+        self.setState(function (s) {
+          const g = Object.assign({}, s[group]);
+          g[key] = !g[key];
+          const out = {}; out[group] = g; return out;
+        });
+      },
+    };
+  }
+
+  renderVals() {
+    const self = this;
+    const keep = this.props.keepDays != null ? this.props.keepDays : 3;
+    const single = this.props.selectionMode === 'group';
+    const bars = this.props.showSizeBars !== false;
+    let count = 0, total = 0;
+
+    const groups = GROUPS.filter(function (g) { return self.state.types[g.key]; }).map(function (g) {
+      const max = Math.max.apply(null, g.items.map(function (r) { return r[2]; }));
+      const items = g.items.map(function (r) {
+        const id = g.key + '/' + r[0];
+        const on = single ? true : !self.state.off[id];
+        if (on) { count += 1; total += r[2]; }
+        return {
+          name: r[0],
+          meta: r[1] + ' · ' + r[4] + 'd ago',
+          size: r[3],
+          pct: bars ? Math.max(3, (r[2] / max) * 100).toFixed(1) + '%' : '0%',
+          recent: r[4] <= keep,
+          on: on, off: !on,
+          toggle: single ? function () {} : function () {
+            self.setState(function (s) {
+              const o = Object.assign({}, s.off);
+              if (o[id]) delete o[id]; else o[id] = true;
+              return { off: o };
+            });
+          },
+        };
+      });
+      return { label: g.label, count: g.count, total: g.total, icon: ICON[g.icon], hasMore: !!g.more, more: g.more || '', items: items };
+    });
+
+    const cov = this.state.done ? 1 : this.state.coverage;
+    const pcts = this.state.tiles || [];
+    let activeName = '', doneCount = 0, biggestLeft = null;
+    const progress = PROGRESS.map(function (p, i) {
+      const f = self.state.done ? 1 : (pcts[i] || 0);
+      const isDone = f >= 0.97;
+      const isActive = !isDone && f > 0.02;
+      if (isDone) doneCount++;
+      if (!isDone && (!biggestLeft || p[2] * (1 - f) > biggestLeft.left)) biggestLeft = { name: p[0], left: p[2] * (1 - f) };
+      if (isActive && !activeName) activeName = p[0];
+      const st = isDone ? 'done' : isActive ? 'active' : 'pending';
+      return {
+        name: p[0], size: p[1],
+        done: isDone, active: isActive, pending: st === 'pending',
+        pct: isActive ? Math.round(f * 100) + '%' : '',
+        showPct: isActive,
+        color: st === 'pending' ? 'var(--ink-4)' : st === 'done' ? 'var(--ink-3)' : 'var(--ink)',
+        strike: isDone ? 'line-through' : 'none',
+      };
+    });
+    const hv = this.state.hover;
+    const hoverTile = hv >= 0 && this.tiles && this.tiles[hv] ? this.tiles[hv] : null;
+    const hoverPct = hoverTile ? Math.round((pcts[hoverTile.i] || 0) * 100) : 0;
+    const nextName = activeName || (biggestLeft ? biggestLeft.name : '');
+
+    return {
+      themeClass: this.props.theme === 'dark' ? 'dark' : '',
+      groups: groups,
+      selCount: count,
+      selSize: this.fmt(total),
+      noop: function () {},
+      /* spray machine */
+      plateRef: this.plateRef, rustRef: this.rustRef, mistRef: this.mistRef,
+      nozzleRef: this.nozzleRef, coneRef: this.coneRef,
+      autoSpray: this.autoSpray, reset: this.reset,
+      freedLabel: this.fmt(FREED * cov),
+      pctLabel: Math.round(cov * 100) + '%',
+      doneLabel: doneCount + ' of ' + PROGRESS.length,
+      etaLabel: this.state.done ? 'done in 48s' : '~' + Math.max(1, Math.round((1 - cov) * 48)) + 's left',
+      statusLine: this.state.done ? '59.1 GB freed — plate is clean' : this.state.started ? this.fmt(FREED * cov) + ' freed so far' : this.fmt(PTOTAL) + ' of crust across ' + PROGRESS.length + ' targets',
+      hasHover: !!hoverTile && !this.state.done,
+      noHover: !hoverTile || this.state.done,
+      hoverName: hoverTile ? hoverTile.name : '',
+      hoverSize: hoverTile ? hoverTile.size : '',
+      hoverPctLabel: hoverPct + '% clear',
+      legendLabel: this.state.done ? 'all 14 tiles clear — 59.1 GB reclaimed' : 'tile area = bytes on disk · ' + doneCount + '/' + PROGRESS.length + ' clear',
+      notStarted: !this.state.started,
+      sprayable: !this.state.done,
+      celebrate: this.state.done,
+      locked: !this.state.done,
+      plateCursor: this.state.done ? 'default' : 'none',
+      removingLabel: this.state.done ? 'cleaned' : 'removing',
+      removingPath: this.state.done ? '22 targets removed · nothing sent to Trash' : (PATHS[nextName] || '…/' + nextName + '/'),
+      progress: progress,
+      /* settings */
+      keepDaysLabel: keep + (keep === 1 ? ' day' : ' days'),
+      keepPct: Math.round((keep / 30) * 100) + '%',
+      typeRows: GROUPS.map(function (g) {
+        const on = self.state.types[g.key];
+        return {
+          label: g.label === 'rust targets' ? 'Rust targets' : g.label === 'xcode' ? 'Xcode caches' : g.label === 'docker' ? 'Docker' : g.label === 'build output' ? 'Build output' : 'node_modules',
+          icon: ICON[g.icon], size: g.total,
+          trackBg: on ? 'var(--ink)' : 'var(--surface-3)',
+          knobPos: on ? 'flex-end' : 'flex-start',
+          toggle: function () {
+            self.setState(function (s) {
+              const t = Object.assign({}, s.types); t[g.key] = !t[g.key]; return { types: t };
+            });
+          },
+        };
+      }),
+      scanRows: [
+        this.switchRow('scan', 'wake', 'Scan on wake', 'Quiet background pass, once a day'),
+        this.switchRow('scan', 'deep', 'Follow symlinks'),
+        { label: 'Scan depth', hint: '', hasHint: false, isSwitch: false, isValue: true, value: '4 levels', trackBg: '', knobPos: '', toggle: function () {} },
+        { label: 'Show size in menu bar', hint: '', hasHint: false, isSwitch: false, isValue: true, value: 'Reclaimable', trackBg: '', knobPos: '', toggle: function () {} },
+      ],
+      safetyRows: [
+        this.switchRow('safety', 'confirm', 'Confirm before cleaning', 'Second tap on the clean button'),
+        this.switchRow('safety', 'node', 'Keep Docker layers in use', 'Never touches images a running container needs'),
+      ],
+    };
+  }
+
+}
+
+</script>
+</body>
+</html>
