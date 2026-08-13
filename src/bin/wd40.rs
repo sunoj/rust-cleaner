@@ -70,6 +70,19 @@ fn cmd_clean(args: &[String]) {
     print_result(result.freed_bytes, result.removed_count, &result.errors);
 }
 
+/// Say what was set aside for want of a measurement, and only when some was.
+fn print_unmeasured(count: usize) {
+    if count == 0 {
+        return;
+    }
+    let sentence = if count == 1 {
+        format!("{count} target could not be measured, so its age is unknown and it was left alone.")
+    } else {
+        format!("{count} targets could not be measured, so their ages are unknown and they were left alone.")
+    };
+    println!("{sentence}");
+}
+
 fn cmd_clean_old(args: &[String]) {
     let config = Config::load();
     let dry_run = has_flag(args, &["--dry-run", "-n"]);
@@ -83,9 +96,16 @@ fn cmd_clean_old(args: &[String]) {
         .filter_map(|target| verified_age(target, &measured_ages, now).map(|age| (target, age)))
         .filter(|(_, age)| *age >= max_age)
         .collect();
+    // A target whose walk produced no age is not young, it is unknown — and
+    // saying nothing about it turns "none are old" into a false statement.
+    let unmeasured = targets
+        .iter()
+        .filter(|target| verified_age(target, &measured_ages, now).is_none())
+        .count();
 
     if old.is_empty() {
         println!("No targets older than {} days.", days);
+        print_unmeasured(unmeasured);
         return;
     }
 
@@ -100,6 +120,8 @@ fn cmd_clean_old(args: &[String]) {
             target.path.display()
         );
     }
+
+    print_unmeasured(unmeasured);
 
     let total = sum_bytes(old.iter().map(|(target, _)| target.size_bytes));
 
