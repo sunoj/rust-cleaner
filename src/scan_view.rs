@@ -61,8 +61,23 @@ pub fn build(state: &AppState, theme: &Theme, target: &AnyObject, mtm: MainThrea
     let footer_zone = Zone::new(&root, 0.0, footer_h(state) + 1.0, mtm);
     draw_footer(footer_zone.view(), state, theme, target, mtm);
 
-    live::install_scan(Scan { theme: *theme, header: header_zone, footer: footer_zone, rows, groups });
+    live::install_scan(Scan {
+        theme: *theme,
+        header: header_zone,
+        footer: footer_zone,
+        rows,
+        groups,
+        membership: membership(state),
+    });
     (root, height)
+}
+
+/// What this state would put on the scan list. Compared to the tree we last
+/// built so an open can reuse it only when the rows and counts still match.
+pub fn membership(state: &AppState) -> crate::menu_rows::Membership {
+    let empty = state.empty_targets();
+    let limit = if state.show_all { usize::MAX } else { VISIBLE_CAP };
+    crate::menu_rows::Membership::of(&state.targets, &empty, limit)
 }
 
 pub fn header_model(state: &AppState) -> ScanHeader {

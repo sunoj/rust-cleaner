@@ -133,7 +133,7 @@ define_class!(
 
         #[unsafe(method(handleRescan:))]
         fn handle_rescan(&self, _sender: &AnyObject) {
-            with_state(|state| state.screen = UiScreen::Scan);
+            // start_scan must still see Done so it can leave that screen now.
             tasks::start_scan(false);
         }
 

@@ -2,10 +2,11 @@
 // arriving or a tile coming off the plate repaints those instead of rebuilding
 // the popover. The old full rebuild also threw away the scroll position, the
 // hover and the spray in flight, which is why those states jumped.
-// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, the `*_changed` hooks.
+// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, `scan_matches`, the `*_changed` hooks.
 // Deps: crate view modules + state + theme; objc2 AppKit.
 
 use crate::checkbox::CheckBox;
+use crate::menu_rows::Membership;
 use crate::plate::PlateView;
 use crate::state::{with_state_ret, AppState, UiScreen};
 use crate::theme::Theme;
@@ -79,6 +80,7 @@ pub struct Scan {
     pub footer: Zone,
     pub rows: Vec<Row>,
     pub groups: Vec<Group>,
+    pub membership: Membership,
 }
 
 pub struct Clean {
@@ -156,9 +158,13 @@ pub fn sizes_arrived(arrived: &[usize], mtm: MainThreadMarker) -> bool {
     })
 }
 
-/// True when the scan list is live and a patch can land on it.
-pub fn has_scan() -> bool {
-    SCAN.with(|cell| cell.borrow().is_some())
+/// True when the cached scan tree was built from this state's rows and counts.
+pub fn scan_matches(state: &AppState) -> bool {
+    SCAN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|scan| scan.membership == crate::scan_view::membership(state))
+    })
 }
 
 /// A row or group was ticked: the boxes and the button, and nothing else.

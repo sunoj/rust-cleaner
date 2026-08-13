@@ -1,5 +1,6 @@
 // Terminal-readable main-thread timings for the popover. A bundled app's
-// stdout goes nowhere; these lines are for a binary launched from a terminal.
+// stdout goes nowhere; these lines print to a terminal when WD40_TRACE or
+// WD40_BENCH is set.
 // Exports: `span`, `log`, `maybe_schedule`. Deps: crate UI modules, objc2.
 
 use crate::hover_row::HoverRow;
@@ -9,11 +10,10 @@ use objc2::rc::Retained;
 use objc2::{msg_send, ClassType, Message};
 use objc2_app_kit::{NSApplication, NSView};
 use objc2_foundation::MainThreadMarker;
-use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant, SystemTime};
 use wd40::scanner::{ArtifactKind, TargetDir};
 
-/// Named interval. Prints on drop when a terminal (or WD40_TRACE) can see it.
+/// Named interval. Prints on drop when WD40_TRACE or WD40_BENCH is set.
 pub struct Span {
     name: &'static str,
     start: Instant,
@@ -54,7 +54,7 @@ fn emit(name: &str, elapsed: Duration, extra: &str) {
 }
 
 fn visible() -> bool {
-    io::stderr().is_terminal() || std::env::var_os("WD40_TRACE").is_some()
+    std::env::var_os("WD40_TRACE").is_some() || std::env::var_os("WD40_BENCH").is_some()
 }
 
 /// Seed a list and time the open / patch / hover paths, then quit.

@@ -72,7 +72,7 @@ fn content_ready(mtm: MainThreadMarker) -> bool {
         return false;
     }
     let ready = with_state_ret(|state| {
-        if state.screen == UiScreen::Scan && !crate::live::has_scan() {
+        if state.screen == UiScreen::Scan && !crate::live::scan_matches(state) {
             return false;
         }
         BUILT_DARK.with(|cell| cell.get() == Some(status_theme(state, mtm).dark))
