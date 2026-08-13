@@ -1,7 +1,7 @@
 // Row container: tints itself while the pointer is inside it, says which
 // directory it stands for while the pointer stays, and treats the whole row as
 // the hit target rather than just the 15pt tick box.
-// Exports: `HoverRow`, `hover_row`.
+// Exports: `HoverRow`, `hover_row`, `fit_detail`.
 // Deps: objc2 AppKit tracking APIs; crate::{actions, theme, widgets}.
 
 use crate::theme::Theme;
@@ -109,6 +109,34 @@ impl HoverRow {
         self.ivars().tint.setHidden(!hovering);
         self.show_path(hovering);
     }
+
+    fn fit_detail(&self, width: f64) {
+        let detail = self.ivars().detail.borrow();
+        let Some(detail) = detail.as_ref() else { return };
+        set_width(&detail.rest, width);
+        set_width(&detail.hover, width);
+    }
+}
+
+/// The age line shares its width with the hover path. A reopen that shows or
+/// hides RECENT has to move both, or the path sits under the badge.
+pub fn fit_detail(age: &NSTextField, width: f64) {
+    if let Some(parent) = unsafe { age.superview() } {
+        if let Some(row) = parent.downcast_ref::<HoverRow>() {
+            row.fit_detail(width);
+            return;
+        }
+    }
+    set_width(age, width);
+}
+
+fn set_width(field: &NSTextField, width: f64) {
+    let mut frame = field.frame();
+    if (frame.size.width - width).abs() < 0.5 {
+        return;
+    }
+    frame.size.width = width;
+    field.setFrame(frame);
 }
 
 fn twin_label(src: &NSTextField, text: &str) -> Retained<NSTextField> {

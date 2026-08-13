@@ -68,6 +68,8 @@ pub struct Row {
     pub wash: Retained<NSBox>,
     /// Second line: kind and age. Ages go stale while the popover is shut.
     pub age: Retained<NSTextField>,
+    /// RECENT marker. Same clock as the age line; hidden once the row is old.
+    pub badge: Retained<NSView>,
 }
 
 pub struct Group {
@@ -207,8 +209,9 @@ pub fn totals_changed(mtm: MainThreadMarker) -> bool {
     })
 }
 
-/// Disk free space and row ages go stale while the popover is shut. Membership
-/// is unchanged, so the tree stays; only the header and the age strings move.
+/// Disk free space, row ages and RECENT badges go stale while the popover is
+/// shut. Membership is unchanged, so the tree stays; only the header and the
+/// age line move.
 pub fn chrome_changed(mtm: MainThreadMarker) -> bool {
     let _span = crate::trace::span("chrome_changed");
     patch(UiScreen::Scan, |state, _target| {
@@ -218,7 +221,7 @@ pub fn chrome_changed(mtm: MainThreadMarker) -> bool {
             redraw_scan_header(scan, state, mtm);
             for row in &scan.rows {
                 if let Some(target) = state.targets.get(row.index) {
-                    crate::scan_rows::show_age(&row.age, target);
+                    crate::scan_rows::show_age(&row.age, &row.badge, target, state.config.max_age_days);
                 }
             }
             true

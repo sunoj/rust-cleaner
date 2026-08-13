@@ -2,7 +2,7 @@
 // back the handles that let a size arrive, or a tick land, without the list
 // being rebuilt underneath.
 // Exports: `ROW_H`, `GROUP_H`, `draw_group_header`, `draw_row`, `show_size`,
-// `show_group_size`.
+// `show_group_size`, `show_age`.
 // Deps: crate::{checkbox, header, hover_row, live, names, reveal, widgets}.
 
 use crate::checkbox::checkbox;
@@ -16,7 +16,7 @@ use crate::theme::Theme;
 use crate::widgets::{self, label, label_right, label_tracked, PAD_X, POPOVER_WIDTH};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::sel;
+use objc2::{sel, MainThreadOnly};
 use objc2_app_kit::{NSBox, NSLineBreakMode, NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 use wd40::scanner::{ArtifactGroup, TargetDir};
@@ -71,10 +71,18 @@ pub fn show_group_size(field: &NSTextField, bytes: u64, settled: bool) {
     field.setStringValue(&NSString::from_str(&format!("{prefix}{}", scan_size(bytes))));
 }
 
-/// The kind · age line. A reopen calls this so "2d ago" can become "3d ago"
+/// The kind · age line and the RECENT badge that shares its clock. A reopen
+/// calls this so "2d ago" can become "3d ago" and the badge can leave with it,
 /// without rebuilding the row.
-pub fn show_age(field: &NSTextField, target: &TargetDir) {
+pub fn show_age(field: &NSTextField, badge: &NSView, target: &TargetDir, max_age_days: u64) {
     field.setStringValue(&NSString::from_str(&meta(target)));
+    let recent = is_recent(target, max_age_days);
+    badge.setHidden(!recent);
+    crate::hover_row::fit_detail(field, detail_width(recent));
+}
+
+fn detail_width(recent: bool) -> f64 {
+    if recent { DETAIL_W_BADGE } else { DETAIL_W }
 }
 
 /// How wide the size wash is for `bytes` against the largest row on screen.
@@ -143,9 +151,8 @@ pub fn draw_row(
     name.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     let recent = is_recent(model.target, model.max_age_days);
     let age = draw_detail(&row, model, recent, theme, mtm);
-    if recent {
-        draw_recent_badge(&row, theme, mtm);
-    }
+    let badge = draw_recent_badge(&row, theme, mtm);
+    badge.setHidden(!recent);
     let size = label_right(&row, "", SIZE_X, 12.0, SIZE_W, 16.0, 13.0, theme.ink, true, mtm);
     show_size(&size, model.measured.then_some(model.target.size_bytes));
     // Its own action, so `HoverRow::hitTest` leaves the click with it: opening
@@ -154,7 +161,7 @@ pub fn draw_row(
         &row, REVEAL_X, (ROW_H - REVEAL_SIDE) / 2.0, sel!(handleRevealItem:), target,
         crate::scan_view::TAG_REVEAL_BASE + model.index as isize, theme.ink_3, mtm,
     );
-    (y, Row { index: model.index, size, check, wash, age })
+    (y, Row { index: model.index, size, check, wash, age, badge })
 }
 
 /// The line under the name: what the row is, and — while the pointer is on it —
@@ -198,11 +205,18 @@ fn meta(target: &TargetDir) -> String {
     format!("{} \u{00b7} {}", target.kind.label(), age_short(target.last_modified))
 }
 
-fn draw_recent_badge(row: &NSView, theme: &Theme, mtm: MainThreadMarker) {
-    let badge = widgets::add_fill(row, PAD_X + 182.0, 3.0, 50.0, 17.0, theme.surface, 1.0, 3.0, mtm);
+fn draw_recent_badge(row: &NSView, theme: &Theme, mtm: MainThreadMarker) -> Retained<NSView> {
+    // One host so a reopen can hide the fill and the word together.
+    let host = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(PAD_X + 182.0, 3.0), NSSize::new(58.0, 17.0)),
+    );
+    let badge = widgets::add_fill(&host, 0.0, 0.0, 50.0, 17.0, theme.surface, 1.0, 3.0, mtm);
     badge.setBorderWidth(1.0);
     badge.setBorderColor(&Theme::color_alpha(theme.warn, 0.35));
-    label_tracked(row, "RECENT", PAD_X + 186.0, 5.0, 54.0, 13.0, 10.0, false, theme.warn, true, 0.4, mtm);
+    label_tracked(&host, "RECENT", 4.0, 2.0, 54.0, 13.0, 10.0, false, theme.warn, true, 0.4, mtm);
+    row.addSubview(&host);
+    host
 }
 
 #[cfg(test)]
@@ -233,5 +247,12 @@ mod tests {
     fn a_cache_row_has_no_age_to_go_stale() {
         let line = meta(&target(ArtifactKind::Cache, SystemTime::UNIX_EPOCH));
         assert_eq!(line, "cache \u{00b7} network downloads to rebuild");
+    }
+
+    #[test]
+    fn aging_out_of_recent_widens_the_detail_to_the_badge_slot() {
+        assert!(super::DETAIL_W > super::DETAIL_W_BADGE);
+        assert_eq!(super::detail_width(true), super::DETAIL_W_BADGE);
+        assert_eq!(super::detail_width(false), super::DETAIL_W);
     }
 }
