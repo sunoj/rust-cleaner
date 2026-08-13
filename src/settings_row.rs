@@ -1,8 +1,8 @@
 // The settings screen's line types: a row that tints under the pointer and
 // carries its click across its whole width, plus the switch, value and group
 // rows the design is built from.
-// Exports: `Spec`, `GroupSpec`, `section`, `divider`, `switch_row`, `value_row`,
-// `group_row`.
+// Exports: row specs and builders for sections, switches, values, disclosures,
+// and artifact groups.
 // Deps: objc2 AppKit tracking APIs; crate::{controls, theme, widgets}.
 
 use crate::controls::pill;
@@ -28,6 +28,7 @@ const CHEVRON: f64 = 13.0;
 const CHEVRON_X: f64 = POPOVER_WIDTH - PAD_X - CHEVRON;
 /// Right edge of a value, clear of the chevron beside it.
 const VALUE_RIGHT: f64 = CHEVRON_X - 5.0;
+const CHOICE_H: f64 = 30.0;
 
 /// What every settings row needs: what it says, and what a click on it sends.
 pub struct Spec<'a> {
@@ -43,6 +44,14 @@ pub struct GroupSpec<'a> {
     /// What the group accounts for right now, or the mark for "not scanned".
     pub size: &'a str,
     pub on: bool,
+    pub action: Sel,
+    pub tag: isize,
+}
+
+/// One hand-drawn option nested beneath an open disclosure row.
+pub struct ChoiceSpec<'a> {
+    pub title: &'a str,
+    pub selected: bool,
     pub action: Sel,
     pub tag: isize,
 }
@@ -159,6 +168,58 @@ pub fn value_row(
     widgets::symbol_view(&row, "chevron.right", CHEVRON_X, (h - CHEVRON) / 2.0, CHEVRON, theme.ink_4, mtm);
     close_row(&row, h, spec.action, 0, target, mtm);
     y_top - h
+}
+
+/// A value row that reveals its choices inline instead of leading elsewhere.
+#[allow(clippy::too_many_arguments)]
+pub fn disclosure_row(
+    parent: &NSView,
+    y_top: f64,
+    spec: &Spec<'_>,
+    value: &str,
+    expanded: bool,
+    choices: &[ChoiceSpec<'_>],
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> f64 {
+    let h = spec.hint.map_or(ROW_H, |_| HINT_ROW_H);
+    let row = open_row(parent, y_top, h, theme, mtm);
+    draw_title(&row, spec, 180.0, theme, mtm);
+    let x = PAD_X + 184.0;
+    label_right(&row, value, x, (h - 16.0) / 2.0, VALUE_RIGHT - x, 16.0, 12.5, theme.ink_2, true, mtm);
+    let chevron = if expanded { "chevron.down" } else { "chevron.right" };
+    widgets::symbol_view(&row, chevron, CHEVRON_X, (h - CHEVRON) / 2.0, CHEVRON, theme.ink_4, mtm);
+    close_row(&row, h, spec.action, 0, target, mtm);
+
+    let mut y = y_top - h;
+    if expanded {
+        for choice in choices {
+            y = choice_row(parent, y, choice, theme, target, mtm);
+        }
+    }
+    y
+}
+
+fn choice_row(
+    parent: &NSView,
+    y_top: f64,
+    choice: &ChoiceSpec<'_>,
+    theme: &Theme,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> f64 {
+    let row = open_row(parent, y_top, CHOICE_H, theme, mtm);
+    if choice.selected {
+        widgets::symbol_view(&row, "checkmark", PAD_X + 7.0, 9.0, 11.0, theme.ink_2, mtm);
+    }
+    label(&row, choice.title, PAD_X + 28.0, 7.0, 180.0, 16.0, 12.5, choice.selected, theme.ink_2, false, mtm);
+    close_row(&row, CHOICE_H, choice.action, choice.tag, target, mtm);
+    y_top - CHOICE_H
+}
+
+pub fn choice_list_height(count: usize) -> f64 {
+    CHOICE_H * count as f64
 }
 
 /// Icon, name, what the group accounts for, and its switch.

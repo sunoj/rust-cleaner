@@ -42,6 +42,13 @@ fn sequence() {
 
     show_screen(UiScreen::Settings, mtm);
     save_popover(&dir.join(format!("settings-{appearance}.png")), mtm);
+    crate::settings_view::toggle_disclosure(crate::settings_view::SettingsDisclosure::AutoClean);
+    popover::refresh(mtm);
+    save_popover(&dir.join(format!("settings-auto-clean-expanded-{appearance}.png")), mtm);
+    crate::settings_view::toggle_disclosure(crate::settings_view::SettingsDisclosure::ScanDepth);
+    popover::refresh(mtm);
+    save_popover(&dir.join(format!("settings-scan-depth-expanded-{appearance}.png")), mtm);
+    crate::settings_view::collapse_disclosure();
 
     stage_cleaning_frame();
     show_screen(UiScreen::Cleaning, mtm);
