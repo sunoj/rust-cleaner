@@ -51,7 +51,6 @@ pub fn toggle(mtm: MainThreadMarker) {
         close();
         return;
     }
-    crate::auto_clean::stop_for_popover();
     crate::auto_clean::apply_pending_snapshot();
     refresh(mtm);
     show(mtm);
@@ -165,6 +164,11 @@ fn ensure_popover(mtm: MainThreadMarker) {
 }
 
 fn show(mtm: MainThreadMarker) {
+    let opening = crate::auto_clean::prepare_popover_opening();
+    show_permitted(mtm, opening);
+}
+
+fn show_permitted(mtm: MainThreadMarker, _opening: crate::auto_clean::PopoverOpening) {
     let button = with_state_ret(|state| state.status_item.button(mtm)).flatten();
     let Some(button) = button else { return };
     let popover = POPOVER.with(|cell| cell.borrow().clone());

@@ -1,6 +1,5 @@
-// Directory sizing for WD-40. A bounded pool (see `walk`) draws directories
-// from every target at once, so the largest target cannot serialise the scan,
-// and each size is handed back the moment it is final.
+// Directory sizing for WD-40. A bounded pool walks every target concurrently,
+// handing each size back as soon as it is final.
 // Exports: `SizedTarget`, `size_targets`, `scan_sizes`, directory measurement.
 // Deps: getattrlistbulk, walkdir, crate::{disk, nesting, scanner, walk}.
 
@@ -10,6 +9,7 @@ use crate::scanner::TargetDir;
 use crate::cache;
 use crate::walk::Walk;
 use getattrlistbulk::{DirReader, ObjectType, RequestedAttributes};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -33,14 +33,14 @@ const BULK_BUF: usize = 256 * 1024;
 pub struct SizedTarget {
     pub index: usize,
     pub bytes: u64,
-    pub last_modified: SystemTime,
+    pub last_modified: Option<SystemTime>,
 }
 
 /// Allocated bytes and the newest content timestamp found below one target.
 #[derive(Clone, Copy)]
 pub struct Measurement {
     pub bytes: u64,
-    pub last_modified: SystemTime,
+    pub last_modified: Option<SystemTime>,
 }
 
 /// Measure every target, calling `on_size` once per target as its size settles.
@@ -58,10 +58,10 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
         .iter()
         .map(|target| cache::measurement_of(&target.path, target.kind))
         .collect();
-    let modified = Mutex::new(targets.iter().map(|target| target.last_modified).collect::<Vec<_>>());
+    let modified = Mutex::new(vec![None; targets.len()]);
     for (index, measurement) in cached.iter().copied().enumerate() {
         let Some((bytes, last_modified)) = measurement else { continue };
-        modified.lock().unwrap_or_else(|error| error.into_inner())[index] = last_modified;
+        modified.lock().unwrap_or_else(|error| error.into_inner())[index] = Some(last_modified);
         let settled = publisher
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -78,7 +78,9 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
     let walk = Walk::new(&paths, &known);
     let remember = |sized: SizedTarget| {
         if let Some(target) = targets.get(sized.index) {
-            cache::put_measurement(&target.path, target.kind, sized.bytes, sized.last_modified);
+            if let Some(last_modified) = sized.last_modified {
+                cache::put_measurement(&target.path, target.kind, sized.bytes, last_modified);
+            }
         }
         on_size(sized);
     };
@@ -94,25 +96,29 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
 }
 
 /// Blocking sizing for callers with nothing to show in the meantime (the CLI).
-pub fn scan_sizes(targets: &mut [TargetDir]) {
-    let initial: Vec<_> = targets.iter().map(|target| (0_u64, target.last_modified)).collect();
+pub fn scan_sizes(targets: &mut [TargetDir]) -> HashMap<PathBuf, SystemTime> {
+    let initial = vec![(0_u64, None); targets.len()];
     let settled = Mutex::new(initial);
     size_targets(targets, |sized| {
-        settled.lock().unwrap_or_else(|error| error.into_inner())[sized.index] =
-            (sized.bytes, sized.last_modified);
+        settled.lock().unwrap_or_else(|error| error.into_inner())[sized.index] = (sized.bytes, sized.last_modified);
     });
     let settled = settled.into_inner().unwrap_or_default();
+    let mut measured_ages = HashMap::new();
     for (target, (bytes, last_modified)) in targets.iter_mut().zip(settled) {
         target.size_bytes = bytes;
-        target.last_modified = last_modified;
+        if let Some(last_modified) = last_modified {
+            target.last_modified = last_modified;
+            measured_ages.insert(target.path.clone(), last_modified);
+        }
     }
     targets.sort_by_key(|target| std::cmp::Reverse(target.size_bytes));
+    measured_ages
 }
 
 /// What one directory contributed.
 pub(crate) struct Found {
     pub bytes: u64,
-    pub last_modified: SystemTime,
+    pub last_modified: Option<SystemTime>,
     pub subdirs: Vec<PathBuf>,
     pub broken: bool,
 }
@@ -128,7 +134,7 @@ pub fn measure_dir(path: &Path) -> u64 {
 pub fn measure_dir_with_modified(path: &Path) -> Measurement {
     let limit = disk_space(path).map(|stats| stats.total_bytes);
     let mut total: u64 = 0;
-    let mut last_modified = SystemTime::UNIX_EPOCH;
+    let mut last_modified = None;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let found = read_dir(&dir);
@@ -154,32 +160,25 @@ pub(crate) fn read_dir(dir: &Path) -> Found {
         .follow_symlinks(false)
         .read();
     let Ok(entries) = entries else {
-        return Found {
-            bytes: 0,
-            last_modified: SystemTime::UNIX_EPOCH,
-            subdirs: Vec::new(),
-            broken: true,
-        };
+        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
     };
-    let last_modified = std::fs::metadata(dir)
+    let Some(last_modified) = std::fs::metadata(dir)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let mut found = Found { bytes: 0, last_modified, subdirs: Vec::new(), broken: false };
+    else {
+        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
+    };
+    let mut found = Found { bytes: 0, last_modified: Some(last_modified), subdirs: Vec::new(), broken: false };
     for entry in entries {
         let Ok(entry) = entry else {
             // Parse error — the data may be corrupt, so the whole target is
             // re-measured the slow way rather than half-counted.
-            return Found {
-                bytes: 0,
-                last_modified: SystemTime::UNIX_EPOCH,
-                subdirs: Vec::new(),
-                broken: true,
-            };
+            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
         };
-        found.last_modified = found
-            .last_modified
-            .max(entry.modified_time.unwrap_or(SystemTime::UNIX_EPOCH));
+        let Some(modified) = entry.modified_time else {
+            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
+        };
+        found.last_modified = found.last_modified.max(Some(modified));
         match entry.object_type {
             Some(ObjectType::Directory) => found.subdirs.push(dir.join(&entry.name)),
             Some(ObjectType::Symlink) => {}
@@ -193,20 +192,19 @@ pub(crate) fn read_dir(dir: &Path) -> Found {
 }
 
 pub(crate) fn dir_measurement_fallback(path: &Path) -> Measurement {
-    WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok())
-        .fold(
-            Measurement { bytes: 0, last_modified: SystemTime::UNIX_EPOCH },
-            |measurement, metadata| Measurement {
-                bytes: measurement.bytes.saturating_add(metadata.blocks().saturating_mul(512)),
-                last_modified: measurement.last_modified.max(
-                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                ),
-            },
-        )
+    let mut measurement = Measurement { bytes: 0, last_modified: None };
+    for entry in WalkDir::new(path).follow_links(false) {
+        let Ok(entry) = entry else { return incomplete(measurement.bytes) };
+        let Ok(metadata) = entry.metadata() else { return incomplete(measurement.bytes) };
+        let Ok(modified) = metadata.modified() else { return incomplete(measurement.bytes) };
+        measurement.bytes = measurement.bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        measurement.last_modified = measurement.last_modified.max(Some(modified));
+    }
+    measurement
+}
+
+fn incomplete(bytes: u64) -> Measurement {
+    Measurement { bytes, last_modified: None }
 }
 
 #[cfg(test)]

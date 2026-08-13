@@ -4,6 +4,7 @@
 
 use crate::names::display_names;
 use crate::state::{with_state, with_state_ret, UiScreen};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -30,6 +31,13 @@ struct AutoCleanJob {
     items: Vec<(TargetDir, String)>,
     reference: Option<PathBuf>,
 }
+
+struct CleanOutcome {
+    receipt: Receipt,
+    remaining: Vec<(PathBuf, u64)>,
+}
+
+pub struct PopoverOpening(());
 
 pub fn start() {
     let cleaning_screen = with_state_ret(|state| state.screen == UiScreen::Cleaning)
@@ -65,6 +73,11 @@ pub fn stop_for_popover() {
     }
 }
 
+pub fn prepare_popover_opening() -> PopoverOpening {
+    stop_for_popover();
+    PopoverOpening(())
+}
+
 pub fn apply_pending_snapshot() {
     let snapshot = SNAPSHOT.lock().unwrap_or_else(|error| error.into_inner()).take();
     let Some(targets) = snapshot else { return };
@@ -94,13 +107,14 @@ fn run(config: Config, stop: &AtomicBool) {
     if stop.load(Ordering::Relaxed) {
         return;
     }
-    wd40::sizes::scan_sizes(&mut targets);
+    let measured_ages = wd40::sizes::scan_sizes(&mut targets);
     if stop.load(Ordering::Relaxed) {
         return;
     }
-    let job = gather_job(&targets, &config, SystemTime::now());
+    let job = gather_job(&targets, &measured_ages, &config, SystemTime::now());
     if let Some(job) = job {
-        let receipt = clean(job, &config, stop);
+        let outcome = clean(job, &config, stop);
+        let receipt = apply_outcome(&mut targets, outcome);
         if !receipt.groups.is_empty() {
             *RECEIPT.lock().unwrap_or_else(|error| error.into_inner()) = Some(receipt);
         }
@@ -110,8 +124,13 @@ fn run(config: Config, stop: &AtomicBool) {
     *SNAPSHOT.lock().unwrap_or_else(|error| error.into_inner()) = Some(targets);
 }
 
-fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option<AutoCleanJob> {
-    let indices = candidate_indices(targets, config, now);
+fn gather_job(
+    targets: &[TargetDir],
+    measured_ages: &HashMap<PathBuf, SystemTime>,
+    config: &Config,
+    now: SystemTime,
+) -> Option<AutoCleanJob> {
+    let indices = candidate_indices(targets, measured_ages, config, now);
     if indices.is_empty() {
         return None;
     }
@@ -129,9 +148,10 @@ fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option
     Some(AutoCleanJob { items, reference })
 }
 
-fn clean(job: AutoCleanJob, config: &Config, stop: &AtomicBool) -> Receipt {
+fn clean(job: AutoCleanJob, config: &Config, stop: &AtomicBool) -> CleanOutcome {
     let before = job.reference.as_deref().and_then(disk_space);
     let mut receipt = Receipt { groups: Vec::new(), names: Vec::new(), freed_bytes: 0 };
+    let mut remaining = Vec::new();
     for (target, name) in job.items {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -140,25 +160,37 @@ fn clean(job: AutoCleanJob, config: &Config, stop: &AtomicBool) -> Receipt {
         if !is_candidate(&target, config, SystemTime::now(), measured.last_modified) {
             continue;
         }
-        let removal = wd40::cleaner::remove_target(&target);
-        record_removal(&mut receipt, &target, name, removal);
+        let mut measured_target = target;
+        measured_target.size_bytes = measured.bytes;
+        let removal = wd40::cleaner::remove_target(&measured_target);
+        if let Some(left_bytes) = remaining_bytes(&removal, measured.bytes) {
+            remaining.push((measured_target.path.clone(), left_bytes));
+        }
+        record_removal(&mut receipt, &measured_target, name, removal);
     }
     receipt.freed_bytes = freed_bytes(before, job.reference.as_deref().and_then(disk_space), receipt.freed_bytes);
-    receipt
+    CleanOutcome { receipt, remaining }
 }
 
 fn can_start(busy: bool, cleaning_screen: bool, popover_open: bool) -> bool {
     !busy && !cleaning_screen && !popover_open
 }
 
-fn candidate_indices(targets: &[TargetDir], config: &Config, now: SystemTime) -> Vec<usize> {
+fn candidate_indices(
+    targets: &[TargetDir],
+    measured_ages: &HashMap<PathBuf, SystemTime>,
+    config: &Config,
+    now: SystemTime,
+) -> Vec<usize> {
     if config.max_age_days == 0 {
         return Vec::new();
     }
     targets
         .iter()
         .enumerate()
-        .filter(|(_, target)| is_candidate(target, config, now, target.last_modified))
+        .filter(|(_, target)| {
+            is_candidate(target, config, now, measured_ages.get(&target.path).copied())
+        })
         .map(|(index, _)| index)
         .collect()
 }
@@ -167,7 +199,7 @@ fn is_candidate(
     target: &TargetDir,
     config: &Config,
     now: SystemTime,
-    last_modified: SystemTime,
+    last_modified: Option<SystemTime>,
 ) -> bool {
     if config.max_age_days == 0
         || matches!(target.kind, ArtifactKind::Toolchain)
@@ -175,8 +207,26 @@ fn is_candidate(
     {
         return false;
     }
+    let Some(last_modified) = last_modified else { return false };
     let threshold = Duration::from_secs(config.max_age_days.saturating_mul(SECONDS_PER_DAY));
     now.duration_since(last_modified).is_ok_and(|age| age >= threshold)
+}
+
+fn remaining_bytes(removal: &Removal, measured: u64) -> Option<u64> {
+    match removal {
+        Removal::Gone => None,
+        Removal::Partial { left_bytes, .. } => Some(*left_bytes),
+        Removal::Refused(_) => Some(measured),
+    }
+}
+
+fn apply_outcome(targets: &mut [TargetDir], outcome: CleanOutcome) -> Receipt {
+    for (path, left_bytes) in outcome.remaining {
+        if let Some(target) = targets.iter_mut().find(|target| target.path == path) {
+            target.size_bytes = left_bytes;
+        }
+    }
+    outcome.receipt
 }
 
 fn record_removal(receipt: &mut Receipt, target: &TargetDir, name: String, removal: Removal) {

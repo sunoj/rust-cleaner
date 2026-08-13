@@ -30,7 +30,7 @@ struct Queue {
     /// Directories queued or in flight for each target.
     outstanding: Vec<usize>,
     bytes: Vec<u64>,
-    last_modified: Vec<SystemTime>,
+    last_modified: Vec<Option<SystemTime>>,
     /// A bulk read failed somewhere under this target, so its whole subtree is
     /// re-walked the slow way rather than reported short.
     broken: Vec<bool>,
@@ -83,7 +83,7 @@ impl Walk {
                 waiting: 0,
                 outstanding: vec![0; paths.len()],
                 bytes: vec![0; paths.len()],
-                last_modified: vec![SystemTime::UNIX_EPOCH; paths.len()],
+                last_modified: vec![None; paths.len()],
                 broken: vec![false; paths.len()],
             }),
             wake: Condvar::new(),
@@ -94,7 +94,7 @@ impl Walk {
         &self,
         paths: &[PathBuf],
         publisher: &Mutex<Publisher>,
-        modified: &Mutex<Vec<SystemTime>>,
+        modified: &Mutex<Vec<Option<SystemTime>>>,
         on_size: &impl Fn(SizedTarget),
     ) {
         while let Some((target, dir)) = self.take(paths) {
