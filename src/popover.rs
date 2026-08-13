@@ -23,6 +23,11 @@ use wd40::scanner::human_size;
 thread_local! {
     static POPOVER: RefCell<Option<Retained<NSPopover>>> = const { RefCell::new(None) };
     static CONTROLLER: RefCell<Option<Retained<NSViewController>>> = const { RefCell::new(None) };
+    /// Appearance the current content was built for. A change means rebuild.
+    static BUILT_DARK: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Rust-tint bucket last drawn into the status item, so a size tick that
+    /// stays in the same band does not lockFocus a new glyph.
+    static ICON_BUCKET: std::cell::Cell<u8> = const { std::cell::Cell::new(u8::MAX) };
 }
 
 /// Wire the status button to toggle the popover instead of showing an NSMenu.
@@ -44,15 +49,38 @@ pub fn attach(mtm: MainThreadMarker) {
     }
     ensure_popover(mtm);
     refresh(mtm);
+    crate::trace::maybe_schedule(mtm);
 }
 
 pub fn toggle(mtm: MainThreadMarker) {
+    let _span = crate::trace::span("toggle");
     if POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|p| p.isShown())) {
         close();
         return;
     }
-    refresh(mtm);
+    // The tree is already current whenever a scan, a tick or a screen change
+    // has rebuilt or patched it. Rebuilding here is what made the pointer
+    // wait on the status item. Disk free space and row ages still go stale
+    // while the popover is shut, so those patch through the live handles.
+    if !content_ready(mtm) {
+        refresh(mtm);
+    } else {
+        let _ = crate::live::chrome_changed(mtm);
+    }
     show(mtm);
+}
+
+fn content_ready(mtm: MainThreadMarker) -> bool {
+    if CONTROLLER.with(|cell| cell.borrow().is_none()) {
+        return false;
+    }
+    let ready = with_state_ret(|state| {
+        if state.screen == UiScreen::Scan && !crate::live::scan_matches(state) {
+            return false;
+        }
+        BUILT_DARK.with(|cell| cell.get() == Some(status_theme(state, mtm).dark))
+    });
+    ready.unwrap_or(false)
 }
 
 pub fn close() {
@@ -64,7 +92,6 @@ pub fn close() {
 }
 
 /// Open the popover if it is not already shown.
-#[cfg(debug_assertions)]
 pub fn ensure_open(mtm: MainThreadMarker) {
     let shown = POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|p| p.isShown()));
     if !shown {
@@ -73,7 +100,6 @@ pub fn ensure_open(mtm: MainThreadMarker) {
 }
 
 /// Content view currently hosted by the popover, for screenshot capture.
-#[cfg(debug_assertions)]
 pub fn content_view(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
     let _ = mtm;
     CONTROLLER.with(|cell| cell.borrow().as_ref().map(|c| c.view()))
@@ -81,6 +107,7 @@ pub fn content_view(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
 
 /// Rebuild popover content from current `AppState` (keeps it open if shown).
 pub fn refresh(mtm: MainThreadMarker) {
+    let _span = crate::trace::span("refresh");
     ensure_popover(mtm);
     crate::scrolling::remember_scroll();
     // The handles are about to point at views that have left the tree.
@@ -102,6 +129,8 @@ pub fn refresh(mtm: MainThreadMarker) {
             popover.setContentSize(NSSize::new(POPOVER_WIDTH, height));
         }
     });
+    let dark = with_state_ret(|state| status_theme(state, mtm).dark);
+    BUILT_DARK.with(|cell| cell.set(dark));
     if was_shown {
         show(mtm);
     }
@@ -159,6 +188,7 @@ fn ensure_popover(mtm: MainThreadMarker) {
 }
 
 fn show(mtm: MainThreadMarker) {
+    let _span = crate::trace::span("show");
     let button = with_state_ret(|state| state.status_item.button(mtm)).flatten();
     let Some(button) = button else { return };
     let popover = POPOVER.with(|cell| cell.borrow().clone());
@@ -174,6 +204,7 @@ fn show(mtm: MainThreadMarker) {
 /// Repaint only the menu bar item. Called while sizes arrive, where rebuilding
 /// the popover to move one number would defeat the point.
 pub fn refresh_status(mtm: MainThreadMarker) {
+    let _span = crate::trace::span("refresh_status");
     with_state_ret(|state| update_status_button(state, mtm));
 }
 
@@ -193,8 +224,18 @@ fn status_theme(state: &AppState, mtm: MainThreadMarker) -> Theme {
 fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
     let total = state.total_size();
     let Some(button) = state.status_item.button(mtm) else { return };
-    if let Some(image) = rusty_icon(total) {
-        button.setImage(Some(&image));
+    let bucket = icon_bucket(total);
+    let redraw = ICON_BUCKET.with(|cell| {
+        let same = cell.get() == bucket && button.image().is_some();
+        if !same {
+            cell.set(bucket);
+        }
+        !same
+    });
+    if redraw {
+        if let Some(image) = rusty_icon(total) {
+            button.setImage(Some(&image));
+        }
     }
     if !state.config.menu_bar_size || total < 1024 * 1024 * 1024 {
         button.setTitle(ns_string!(""));
@@ -203,4 +244,13 @@ fn update_status_button(state: &AppState, mtm: MainThreadMarker) {
     let title = format!(" {}", human_size(total));
     let font = NSFont::menuBarFontOfSize(0.0);
     button.setAttributedTitle(&tinted(&title, &font, &rust_text_color(total)));
+}
+
+fn icon_bucket(total_bytes: u64) -> u8 {
+    match total_bytes / (1024 * 1024 * 1024) {
+        0..=4 => 0,
+        5..=19 => 1,
+        20..=49 => 2,
+        _ => 3,
+    }
 }

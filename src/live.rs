@@ -2,10 +2,11 @@
 // arriving or a tile coming off the plate repaints those instead of rebuilding
 // the popover. The old full rebuild also threw away the scroll position, the
 // hover and the spray in flight, which is why those states jumped.
-// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, the `*_changed` hooks.
+// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, `scan_matches`, `chrome_changed`, the `*_changed` hooks.
 // Deps: crate view modules + state + theme; objc2 AppKit.
 
 use crate::checkbox::CheckBox;
+use crate::menu_rows::Membership;
 use crate::plate::PlateView;
 use crate::state::{with_state_ret, AppState, UiScreen};
 use crate::theme::Theme;
@@ -65,6 +66,10 @@ pub struct Row {
     pub check: CheckBox,
     /// Accent bar behind the row, drawn to the size's share of the largest row.
     pub wash: Retained<NSBox>,
+    /// Second line: kind and age. Ages go stale while the popover is shut.
+    pub age: Retained<NSTextField>,
+    /// RECENT marker. Same clock as the age line; hidden once the row is old.
+    pub badge: Retained<NSView>,
 }
 
 pub struct Group {
@@ -79,6 +84,7 @@ pub struct Scan {
     pub footer: Zone,
     pub rows: Vec<Row>,
     pub groups: Vec<Group>,
+    pub membership: Membership,
 }
 
 pub struct Clean {
@@ -117,6 +123,7 @@ pub fn clear() {
 /// False means there is no live scan screen to patch and the caller should
 /// rebuild instead.
 pub fn sizes_arrived(arrived: &[usize], mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("sizes_arrived").extra(format!("n={}", arrived.len()));
     patch(UiScreen::Scan, |state, target| {
         SCAN.with(|cell| {
             let held = cell.borrow();
@@ -143,14 +150,30 @@ pub fn sizes_arrived(arrived: &[usize], mtm: MainThreadMarker) -> bool {
                     state.group_settled(group.group),
                 );
             }
-            redraw_scan_frame(scan, state, target, mtm);
+            // The footer stays on "Measuring" until every size is in. Rebuilding
+            // it on each hop is the same button, and it is the expensive half.
+            if state.sizing() {
+                redraw_scan_header(scan, state, mtm);
+            } else {
+                redraw_scan_frame(scan, state, target, mtm);
+            }
             true
         })
     })
 }
 
+/// True when the cached scan tree was built from this state's rows and counts.
+pub fn scan_matches(state: &AppState) -> bool {
+    SCAN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|scan| scan.membership == crate::scan_view::membership(state))
+    })
+}
+
 /// A row or group was ticked: the boxes and the button, and nothing else.
 pub fn selection_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("selection_changed");
     patch(UiScreen::Scan, |state, target| {
         SCAN.with(|cell| {
             let held = cell.borrow();
@@ -168,6 +191,39 @@ pub fn selection_changed(mtm: MainThreadMarker) -> bool {
             }
             scan.footer.clear();
             crate::scan_view::draw_footer(scan.footer.view(), state, &scan.theme, target, mtm);
+            true
+        })
+    })
+}
+
+/// Reclaim or a header figure landed. Rows stay put; only the chrome is redrawn.
+pub fn totals_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("totals_changed");
+    patch(UiScreen::Scan, |state, target| {
+        SCAN.with(|cell| {
+            let held = cell.borrow();
+            let Some(scan) = held.as_ref() else { return false };
+            redraw_scan_frame(scan, state, target, mtm);
+            true
+        })
+    })
+}
+
+/// Disk free space, row ages and RECENT badges go stale while the popover is
+/// shut. Membership is unchanged, so the tree stays; only the header and the
+/// age line move.
+pub fn chrome_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("chrome_changed");
+    patch(UiScreen::Scan, |state, _target| {
+        SCAN.with(|cell| {
+            let held = cell.borrow();
+            let Some(scan) = held.as_ref() else { return false };
+            redraw_scan_header(scan, state, mtm);
+            for row in &scan.rows {
+                if let Some(target) = state.targets.get(row.index) {
+                    crate::scan_rows::show_age(&row.age, &row.badge, target, state.config.max_age_days);
+                }
+            }
             true
         })
     })
@@ -212,7 +268,7 @@ fn largest(state: &AppState) -> u64 {
         .max(1)
 }
 
-fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
+fn redraw_scan_header(scan: &Scan, state: &AppState, mtm: MainThreadMarker) {
     scan.header.clear();
     crate::header::draw_scan_header(
         scan.header.view(),
@@ -221,6 +277,10 @@ fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: Mai
         &scan.theme,
         mtm,
     );
+}
+
+fn redraw_scan_frame(scan: &Scan, state: &AppState, target: &AnyObject, mtm: MainThreadMarker) {
+    redraw_scan_header(scan, state, mtm);
     scan.footer.clear();
     crate::scan_view::draw_footer(scan.footer.view(), state, &scan.theme, target, mtm);
 }

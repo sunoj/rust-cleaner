@@ -1,5 +1,5 @@
 // Group planning for popover scan lists: which rows fit within a visible budget.
-// Exports: `GroupPlan`, `RowPlan`, `plan_groups`. Pure — no AppKit.
+// Exports: `GroupPlan`, `RowPlan`, `Membership`, `plan_groups`. Pure — no AppKit.
 // Deps: crate::names, wd40::{disk, scanner}.
 
 use crate::names::display_names;
@@ -28,6 +28,35 @@ pub struct GroupPlan<'a> {
     /// Rows this group has but the budget could not fit.
     pub hidden: usize,
     pub size: u64,
+}
+
+/// The visible row set and the group counts it was planned from. A later open
+/// rebuilds only when this no longer matches — size hops patch labels, not
+/// which rows belong on screen.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Membership {
+    rows: Vec<usize>,
+    counts: Vec<(ArtifactGroup, usize)>,
+}
+
+impl Membership {
+    pub fn of(targets: &[TargetDir], empty: &HashSet<usize>, limit: usize) -> Self {
+        let plans = plan_groups(targets, empty, limit);
+        Self {
+            rows: plans.iter().flat_map(|p| p.rows.iter().map(|r| r.index)).collect(),
+            counts: plans.iter().map(|p| (p.group, p.count)).collect(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Membership {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let counts: Vec<(&str, usize)> = self.counts.iter().map(|(g, n)| (g.key(), *n)).collect();
+        f.debug_struct("Membership")
+            .field("rows", &self.rows)
+            .field("counts", &counts)
+            .finish()
+    }
 }
 
 /// Split `targets` into groups and decide which rows fit within `limit`.
@@ -102,7 +131,7 @@ fn allocate(sizes: &[usize], limit: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{allocate, plan_groups};
+    use super::{allocate, plan_groups, Membership};
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::SystemTime;
@@ -146,6 +175,66 @@ mod tests {
                 assert!(given <= &available, "{sizes:?} -> {quota:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_target_that_measures_empty_changes_membership() {
+        let targets = vec![
+            target("/w/a/target", ArtifactKind::RustTarget, 9),
+            target("/w/b/target", ArtifactKind::RustTarget, 4),
+        ];
+        let before = Membership::of(&targets, &HashSet::new(), 10);
+        let after = Membership::of(&targets, &HashSet::from([1]), 10);
+        assert_ne!(before, after);
+        assert_eq!(after, Membership::of(&targets[..1], &HashSet::new(), 10));
+    }
+
+    #[test]
+    fn membership_ignores_how_old_a_target_is() {
+        let now = SystemTime::now();
+        let young = TargetDir {
+            path: PathBuf::from("/w/a/target"),
+            size_bytes: 9,
+            last_modified: now,
+            kind: ArtifactKind::RustTarget,
+        };
+        let old = TargetDir {
+            last_modified: now
+                .checked_sub(std::time::Duration::from_secs(3 * 86_400))
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            ..young.clone()
+        };
+        assert_eq!(
+            Membership::of(&[young], &HashSet::new(), 10),
+            Membership::of(&[old], &HashSet::new(), 10),
+        );
+    }
+
+    #[test]
+    fn a_nonzero_size_leaves_membership_alone() {
+        let unmeasured = vec![
+            target("/w/a/target", ArtifactKind::RustTarget, 0),
+            target("/w/b/target", ArtifactKind::RustTarget, 8),
+        ];
+        let settled = vec![
+            target("/w/a/target", ArtifactKind::RustTarget, 12),
+            target("/w/b/target", ArtifactKind::RustTarget, 8),
+        ];
+        assert_eq!(
+            Membership::of(&unmeasured, &HashSet::new(), 10),
+            Membership::of(&settled, &HashSet::new(), 10),
+        );
+    }
+
+    #[test]
+    fn a_hidden_empty_target_still_changes_the_count() {
+        let targets: Vec<TargetDir> = (0..7)
+            .map(|i| target(&format!("/w/{i}/target"), ArtifactKind::RustTarget, 10 - i as u64))
+            .collect();
+        let before = Membership::of(&targets, &HashSet::new(), 6);
+        let after = Membership::of(&targets, &HashSet::from([6]), 6);
+        assert_ne!(before, after);
+        assert_eq!(after, Membership::of(&targets[..6], &HashSet::new(), 6));
     }
 
     /// A row that frees nothing is not a row, and the count says so — the
