@@ -1,24 +1,34 @@
 // Unattended clean policy and runner, independent of manual row selection.
 // Exports: timer entry point, receipt text, pending-snapshot application.
-// Deps: crate::{names, popover, state, tasks, tasks_clean}, wd40 scan/clean APIs.
+// Deps: crate::{names, popover, state, tasks}, wd40 scan/clean APIs.
 
 use crate::names::display_names;
 use crate::state::{with_state, with_state_ret, UiScreen};
-use crate::tasks_clean::{self, CleanJob};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
+use wd40::cleaner::Removal;
 use wd40::config::Config;
+use wd40::disk::{disk_space, DiskSpace};
 use wd40::scanner::{human_size, ArtifactGroup, ArtifactKind, TargetDir};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
 static RECEIPT: Mutex<Option<Receipt>> = Mutex::new(None);
 static SNAPSHOT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct Receipt {
     groups: Vec<(ArtifactGroup, usize)>,
+    names: Vec<String>,
     freed_bytes: u64,
+}
+
+struct AutoCleanJob {
+    items: Vec<(TargetDir, String)>,
+    reference: Option<PathBuf>,
 }
 
 pub fn start() {
@@ -34,13 +44,25 @@ pub fn start() {
     if !crate::tasks::claim_cleaning() {
         return;
     }
+    crate::tasks::reset_clean_stop();
+    clear_receipt();
+    RUNNING.store(true, Ordering::Relaxed);
     std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(|| run(config));
+        let result = std::panic::catch_unwind(|| run(config, crate::tasks::clean_stop_flag()));
         if result.is_err() {
             eprintln!("wd-40: automatic clean stopped unexpectedly");
         }
+        RUNNING.store(false, Ordering::Relaxed);
         crate::tasks::finish_cleaning();
     });
+}
+
+/// Opening the popover while an unattended pass is active stops that pass
+/// before it can start another permanent removal.
+pub fn stop_for_popover() {
+    if RUNNING.load(Ordering::Relaxed) {
+        crate::tasks::request_stop();
+    }
 }
 
 pub fn apply_pending_snapshot() {
@@ -58,17 +80,27 @@ pub fn discard_pending_snapshot() {
     SNAPSHOT.lock().unwrap_or_else(|error| error.into_inner()).take();
 }
 
+pub fn clear_receipt() {
+    RECEIPT.lock().unwrap_or_else(|error| error.into_inner()).take();
+}
+
 pub fn receipt_line() -> Option<String> {
     let receipt = RECEIPT.lock().unwrap_or_else(|error| error.into_inner());
     format_receipt(receipt.as_ref())
 }
 
-fn run(config: Config) {
+fn run(config: Config, stop: &AtomicBool) {
     let mut targets = wd40::discover::scan_discover(&config);
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
     wd40::sizes::scan_sizes(&mut targets);
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
     let job = gather_job(&targets, &config, SystemTime::now());
     if let Some(job) = job {
-        let receipt = clean(job);
+        let receipt = clean(job, &config, stop);
         if !receipt.groups.is_empty() {
             *RECEIPT.lock().unwrap_or_else(|error| error.into_inner()) = Some(receipt);
         }
@@ -78,7 +110,7 @@ fn run(config: Config) {
     *SNAPSHOT.lock().unwrap_or_else(|error| error.into_inner()) = Some(targets);
 }
 
-fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option<CleanJob> {
+fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option<AutoCleanJob> {
     let indices = candidate_indices(targets, config, now);
     if indices.is_empty() {
         return None;
@@ -86,7 +118,7 @@ fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option
     let names = display_names(targets);
     let items = indices
         .into_iter()
-        .map(|index| (index, targets[index].clone(), names[index].clone()))
+        .map(|index| (targets[index].clone(), names[index].clone()))
         .collect();
     let reference = config
         .scan_dirs
@@ -94,21 +126,25 @@ fn gather_job(targets: &[TargetDir], config: &Config, now: SystemTime) -> Option
         .find(|path| path.exists())
         .or_else(|| targets.first().map(|target| &target.path))
         .cloned();
-    Some(CleanJob { items, skipped_count: 0, skipped_bytes: 0, reference })
+    Some(AutoCleanJob { items, reference })
 }
 
-fn clean(job: CleanJob) -> Receipt {
-    let CleanJob { items, skipped_count, skipped_bytes, reference } = job;
-    let before = reference.as_deref().and_then(wd40::disk::disk_space);
-    let progress = tasks_clean::initial_progress(&items);
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    let summary = tasks_clean::run_clean(
-        items, skipped_count, skipped_bytes, reference, before, progress, |_| {}, &stop,
-    );
-    Receipt {
-        groups: summary.removed.iter().map(|row| (row.group, row.count)).collect(),
-        freed_bytes: summary.freed_bytes,
+fn clean(job: AutoCleanJob, config: &Config, stop: &AtomicBool) -> Receipt {
+    let before = job.reference.as_deref().and_then(disk_space);
+    let mut receipt = Receipt { groups: Vec::new(), names: Vec::new(), freed_bytes: 0 };
+    for (target, name) in job.items {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let measured = wd40::sizes::measure_dir_with_modified(&target.path);
+        if !is_candidate(&target, config, SystemTime::now(), measured.last_modified) {
+            continue;
+        }
+        let removal = wd40::cleaner::remove_target(&target);
+        record_removal(&mut receipt, &target, name, removal);
     }
+    receipt.freed_bytes = freed_bytes(before, job.reference.as_deref().and_then(disk_space), receipt.freed_bytes);
+    receipt
 }
 
 fn can_start(busy: bool, cleaning_screen: bool, popover_open: bool) -> bool {
@@ -119,18 +155,49 @@ fn candidate_indices(targets: &[TargetDir], config: &Config, now: SystemTime) ->
     if config.max_age_days == 0 {
         return Vec::new();
     }
-    let threshold = Duration::from_secs(config.max_age_days.saturating_mul(SECONDS_PER_DAY));
     targets
         .iter()
         .enumerate()
-        .filter(|(_, target)| !matches!(target.kind, ArtifactKind::Toolchain))
-        .filter(|(_, target)| config.scans(target.kind.group()))
-        .filter(|(_, target)| {
-            now.duration_since(target.last_modified)
-                .is_ok_and(|age| age >= threshold)
-        })
+        .filter(|(_, target)| is_candidate(target, config, now, target.last_modified))
         .map(|(index, _)| index)
         .collect()
+}
+
+fn is_candidate(
+    target: &TargetDir,
+    config: &Config,
+    now: SystemTime,
+    last_modified: SystemTime,
+) -> bool {
+    if config.max_age_days == 0
+        || matches!(target.kind, ArtifactKind::Toolchain)
+        || !config.scans(target.kind.group())
+    {
+        return false;
+    }
+    let threshold = Duration::from_secs(config.max_age_days.saturating_mul(SECONDS_PER_DAY));
+    now.duration_since(last_modified).is_ok_and(|age| age >= threshold)
+}
+
+fn record_removal(receipt: &mut Receipt, target: &TargetDir, name: String, removal: Removal) {
+    let freed = removal.freed_bytes(target.size_bytes);
+    if freed == 0 {
+        return;
+    }
+    if let Some((_, count)) = receipt.groups.iter_mut().find(|(group, _)| *group == target.kind.group()) {
+        *count += 1;
+    } else {
+        receipt.groups.push((target.kind.group(), 1));
+    }
+    receipt.names.push(name);
+    receipt.freed_bytes = receipt.freed_bytes.saturating_add(freed);
+}
+
+fn freed_bytes(before: Option<DiskSpace>, after: Option<DiskSpace>, measured: u64) -> u64 {
+    match (before, after) {
+        (Some(before), Some(after)) => after.free_bytes.saturating_sub(before.free_bytes),
+        _ => measured,
+    }
 }
 
 fn format_receipt(receipt: Option<&Receipt>) -> Option<String> {
@@ -143,7 +210,8 @@ fn format_receipt(receipt: Option<&Receipt>) -> Option<String> {
         .collect::<Vec<_>>()
         .join("/");
     Some(format!(
-        "Auto-cleaned {count} targets \u{00b7} {kinds} \u{00b7} {}",
+        "Auto-cleaned {count} targets ({}) \u{00b7} {kinds} \u{00b7} {}",
+        receipt.names.join(", "),
         human_size(receipt.freed_bytes)
     ))
 }
@@ -159,87 +227,5 @@ fn receipt_group_label(group: ArtifactGroup) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{can_start, candidate_indices, format_receipt, Receipt};
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
-    use wd40::config::Config;
-    use wd40::scanner::{ArtifactGroup, ArtifactKind, TargetDir};
-
-    fn target(now: SystemTime, age_days: u64, kind: ArtifactKind) -> TargetDir {
-        TargetDir {
-            path: PathBuf::from(format!("/tmp/auto-clean-{age_days}")),
-            size_bytes: 1024,
-            last_modified: now - Duration::from_secs(age_days * 86_400),
-            kind,
-        }
-    }
-
-    #[test]
-    fn manual_selection_does_not_affect_auto_clean_policy() {
-        let now = SystemTime::now();
-        let targets = vec![
-            target(now, 8, ArtifactKind::RustTarget),
-            target(now, 2, ArtifactKind::RustTarget),
-        ];
-        let manual_selection = HashSet::from([1]);
-        let candidates = candidate_indices(&targets, &Config::default(), now);
-        assert_eq!(candidates, [0]);
-        assert!(!manual_selection.contains(&candidates[0]));
-    }
-
-    #[test]
-    fn target_one_day_under_keep_threshold_survives() {
-        let now = SystemTime::now();
-        let config = Config { max_age_days: 7, ..Config::default() };
-        let targets = vec![target(now, 6, ArtifactKind::RustTarget)];
-        assert!(candidate_indices(&targets, &config, now).is_empty());
-    }
-
-    #[test]
-    fn zero_keep_threshold_yields_no_auto_clean_candidates() {
-        let now = SystemTime::now();
-        let config = Config { max_age_days: 0, ..Config::default() };
-        let targets = vec![target(now, 30, ArtifactKind::RustTarget)];
-        assert!(candidate_indices(&targets, &config, now).is_empty());
-    }
-
-    #[test]
-    fn disabled_group_is_untouched() {
-        let now = SystemTime::now();
-        let mut config = Config::default();
-        config.set_scans(ArtifactGroup::Caches, false);
-        let targets = vec![target(now, 30, ArtifactKind::Cache)];
-        assert!(candidate_indices(&targets, &config, now).is_empty());
-    }
-
-    #[test]
-    fn toolchains_are_never_auto_clean_candidates() {
-        let now = SystemTime::now();
-        let config = Config { max_age_days: 0, ..Config::default() };
-        let targets = vec![target(now, 1000, ArtifactKind::Toolchain)];
-        assert!(config.scans(ArtifactGroup::Toolchains));
-        assert!(candidate_indices(&targets, &config, now).is_empty());
-    }
-
-    #[test]
-    fn start_guard_rejects_every_unsafe_ui_state() {
-        assert!(can_start(false, false, false));
-        assert!(!can_start(true, false, false));
-        assert!(!can_start(false, true, false));
-        assert!(!can_start(false, false, true));
-    }
-
-    #[test]
-    fn receipt_line_exists_only_after_a_removal() {
-        assert!(format_receipt(None).is_none());
-        let receipt = Receipt {
-            groups: vec![(ArtifactGroup::Rust, 2), (ArtifactGroup::Caches, 1)],
-            freed_bytes: 1536,
-        };
-        let line = format_receipt(Some(&receipt)).expect("receipt line");
-        assert!(line.contains("3 targets \u{00b7} Rust/Caches"));
-        assert!(line.ends_with("1.5K"));
-    }
-}
+#[path = "auto_clean_tests.rs"]
+mod tests;

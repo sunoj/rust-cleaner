@@ -70,12 +70,21 @@ pub fn stop_requested() -> bool {
     STOP_AFTER.load(Ordering::Relaxed)
 }
 
+pub(crate) fn clean_stop_flag() -> &'static AtomicBool {
+    &STOP_AFTER
+}
+
+pub(crate) fn reset_clean_stop() {
+    STOP_AFTER.store(false, Ordering::Relaxed);
+}
+
 pub fn start_scan() {
     let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
     if CLEANING.load(Ordering::Relaxed) || SCANNING.swap(true, Ordering::Relaxed) {
         return;
     }
     crate::auto_clean::discard_pending_snapshot();
+    crate::auto_clean::clear_receipt();
     if let Some(mtm) = MainThreadMarker::new() {
         with_state(|state| {
             if state.screen == UiScreen::Done {

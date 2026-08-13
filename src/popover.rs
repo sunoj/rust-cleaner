@@ -51,6 +51,7 @@ pub fn toggle(mtm: MainThreadMarker) {
         close();
         return;
     }
+    crate::auto_clean::stop_for_popover();
     crate::auto_clean::apply_pending_snapshot();
     refresh(mtm);
     show(mtm);
