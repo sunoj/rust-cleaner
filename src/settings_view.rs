@@ -107,7 +107,11 @@ fn draw_scanning(
     });
     y = disclosure_row(
         parent, y,
-        &Spec { title: "Auto clean", hint: None, action: sel!(settingsInterval:) },
+        &Spec {
+            title: "Auto clean",
+            hint: auto_clean_hint(state.config.auto_clean_hours, state.config.max_age_days),
+            action: sel!(settingsInterval:),
+        },
         interval_label(state.config.auto_clean_hours), open == Some(SettingsDisclosure::AutoClean),
         &interval_choices, theme, target, mtm,
     );
@@ -263,6 +267,10 @@ fn interval_label(hours: u64) -> &'static str {
     INTERVALS.iter().find(|(h, _)| *h == hours).map(|(_, l)| *l).unwrap_or("custom")
 }
 
+fn auto_clean_hint(hours: u64, max_age_days: u64) -> Option<&'static str> {
+    (hours > 0 && max_age_days == 0).then_some("Paused: set keep-days above 0")
+}
+
 pub fn toggle_disclosure(disclosure: SettingsDisclosure) {
     OPEN_DISCLOSURE.with(|open| {
         let next = (open.get() != Some(disclosure)).then_some(disclosure);
@@ -292,3 +300,15 @@ fn disclosure_height() -> f64 {
 
 #[cfg(test)]
 pub fn active_disclosure() -> Option<SettingsDisclosure> { open_disclosure() }
+
+#[cfg(test)]
+mod tests {
+    use super::auto_clean_hint;
+
+    #[test]
+    fn auto_clean_pause_hint_only_appears_when_enabled_without_a_threshold() {
+        assert_eq!(auto_clean_hint(1, 0), Some("Paused: set keep-days above 0"));
+        assert_eq!(auto_clean_hint(0, 0), None);
+        assert_eq!(auto_clean_hint(1, 7), None);
+    }
+}

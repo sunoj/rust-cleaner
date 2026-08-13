@@ -2,7 +2,7 @@
 // true. Level one is this process; level two is a file, because the expensive
 // pass is the one that runs at launch and a cache that dies with the process
 // never spares it.
-// Exports: `ttl`, `size_of`, `put_size`, `forget`, `attribution_for`,
+// Exports: `ttl`, `measurement_of`, `put_measurement`, `forget`, `attribution_for`,
 // `put_attribution`, `load`, `flush`. Extent maps live in `extent_cache`.
 // Deps: serde, toml, dirs, crate::{extents, scanner}.
 
@@ -54,6 +54,8 @@ struct Sized_ {
     /// The directory's own mtime when this was measured. A clock check alone
     /// would keep a figure for a directory that changed a second later.
     modified: u64,
+    /// Newest entry below the target when its contents were measured.
+    content_modified: u64,
     measured: u64,
     bytes: u64,
 }
@@ -69,9 +71,9 @@ static STORE: Mutex<Option<Store>> = Mutex::new(None);
 /// Set when level one has moved on from what is on disk.
 static DIRTY: Mutex<bool> = Mutex::new(false);
 
-/// The size measured for `path`, if it is still within this kind's TTL and the
-/// directory has not been touched since.
-pub fn size_of(path: &Path, kind: ArtifactKind) -> Option<u64> {
+/// The size and newest content time measured for `path`, while both remain
+/// within this kind's TTL and the directory has not been touched since.
+pub fn measurement_of(path: &Path, kind: ArtifactKind) -> Option<(u64, SystemTime)> {
     let ttl = ttl(kind);
     if ttl.is_zero() {
         return None;
@@ -80,10 +82,17 @@ pub fn size_of(path: &Path, kind: ArtifactKind) -> Option<u64> {
     let guard = STORE.lock().ok()?;
     let entry = guard.as_ref()?.sizes.get(&key(path))?;
     let fresh = now().saturating_sub(entry.measured) <= ttl.as_secs();
-    (entry.modified == modified && fresh).then_some(entry.bytes)
+    (entry.modified == modified && fresh).then(|| {
+        (entry.bytes, UNIX_EPOCH + Duration::from_secs(entry.content_modified))
+    })
 }
 
-pub fn put_size(path: &Path, kind: ArtifactKind, bytes: u64) {
+pub fn put_measurement(
+    path: &Path,
+    kind: ArtifactKind,
+    bytes: u64,
+    content_modified: SystemTime,
+) {
     if ttl(kind).is_zero() {
         return;
     }
@@ -91,10 +100,12 @@ pub fn put_size(path: &Path, kind: ArtifactKind, bytes: u64) {
     else {
         return;
     };
+    let Some(content_modified) = seconds(content_modified) else { return };
     with_store(|store| {
-        store
-            .sizes
-            .insert(key(path), Sized_ { modified, measured: now(), bytes });
+        store.sizes.insert(
+            key(path),
+            Sized_ { modified, content_modified, measured: now(), bytes },
+        );
     });
 }
 
@@ -209,7 +220,7 @@ fn path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{forget, put_size, size_of, ttl};
+    use super::{forget, measurement_of, put_measurement, ttl};
     use crate::scanner::ArtifactKind;
     use std::path::PathBuf;
 
@@ -225,8 +236,8 @@ mod tests {
     #[test]
     fn a_build_directory_is_never_kept() {
         let path = scratch("target");
-        put_size(&path, ArtifactKind::RustTarget, 4096);
-        assert_eq!(size_of(&path, ArtifactKind::RustTarget), None);
+        put_measurement(&path, ArtifactKind::RustTarget, 4096, std::time::SystemTime::now());
+        assert_eq!(measurement_of(&path, ArtifactKind::RustTarget), None);
         assert!(ttl(ArtifactKind::RustTarget).is_zero());
         assert!(ttl(ArtifactKind::TmpTarget).is_zero());
         let _ = std::fs::remove_dir_all(&path);
@@ -245,9 +256,10 @@ mod tests {
     #[test]
     fn a_toolchain_is_answered_the_second_time() {
         let path = scratch("toolchain");
-        assert_eq!(size_of(&path, ArtifactKind::Toolchain), None);
-        put_size(&path, ArtifactKind::Toolchain, 4096);
-        assert_eq!(size_of(&path, ArtifactKind::Toolchain), Some(4096));
+        assert_eq!(measurement_of(&path, ArtifactKind::Toolchain), None);
+        let modified = std::time::SystemTime::now();
+        put_measurement(&path, ArtifactKind::Toolchain, 4096, modified);
+        assert_eq!(measurement_of(&path, ArtifactKind::Toolchain).map(|value| value.0), Some(4096));
         let _ = std::fs::remove_dir_all(&path);
     }
 
@@ -256,28 +268,28 @@ mod tests {
     #[test]
     fn touching_the_directory_beats_the_clock() {
         let path = scratch("touched");
-        put_size(&path, ArtifactKind::Cache, 4096);
-        assert_eq!(size_of(&path, ArtifactKind::Cache), Some(4096));
+        put_measurement(&path, ArtifactKind::Cache, 4096, std::time::SystemTime::now());
+        assert_eq!(measurement_of(&path, ArtifactKind::Cache).map(|value| value.0), Some(4096));
         std::thread::sleep(std::time::Duration::from_millis(1100));
         let _ = std::fs::write(path.join("new"), b"x");
-        assert_eq!(size_of(&path, ArtifactKind::Cache), None);
+        assert_eq!(measurement_of(&path, ArtifactKind::Cache), None);
         let _ = std::fs::remove_dir_all(&path);
     }
 
     #[test]
     fn forgetting_a_removed_path_makes_it_measurable_again() {
         let path = scratch("forgotten");
-        put_size(&path, ArtifactKind::Cache, 4096);
+        put_measurement(&path, ArtifactKind::Cache, 4096, std::time::SystemTime::now());
         forget(&path);
-        assert_eq!(size_of(&path, ArtifactKind::Cache), None);
+        assert_eq!(measurement_of(&path, ArtifactKind::Cache), None);
         let _ = std::fs::remove_dir_all(&path);
     }
 
     #[test]
     fn a_path_that_is_gone_is_never_answered() {
         let path = scratch("vanished");
-        put_size(&path, ArtifactKind::Cache, 4096);
+        put_measurement(&path, ArtifactKind::Cache, 4096, std::time::SystemTime::now());
         let _ = std::fs::remove_dir_all(&path);
-        assert_eq!(size_of(&path, ArtifactKind::Cache), None);
+        assert_eq!(measurement_of(&path, ArtifactKind::Cache), None);
     }
 }

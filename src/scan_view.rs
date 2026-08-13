@@ -37,9 +37,12 @@ const VISIBLE_CAP: usize = 6;
 /// when there is a caveat.
 const FOOTER_BASE_H: f64 = 95.0;
 const CAVEAT_H: f64 = 20.0;
+const RECEIPT_H: f64 = 20.0;
 
 fn footer_h(state: &AppState) -> f64 {
-    FOOTER_BASE_H + if footer_caveat(state).is_some() { CAVEAT_H } else { 0.0 }
+    FOOTER_BASE_H
+        + if footer_caveat(state).is_some() { CAVEAT_H } else { 0.0 }
+        + if crate::auto_clean::receipt_line().is_some() { RECEIPT_H } else { 0.0 }
 }
 const MAX_HEIGHT: f64 = 540.0;
 
@@ -218,8 +221,13 @@ pub fn draw_footer(
 ) {
     add_line(parent, 0.0, footer_h(state), POPOVER_WIDTH, theme.line, mtm);
     clean_button(parent, &clean_cta(state), PAD_X, footer_h(state) - 47.0, CONTENT_WIDTH, sel!(handleCleanSelected:), target, TAG_CLEAN, theme, mtm);
+    let mut line_y = footer_h(state) - 69.0;
+    if let Some(receipt) = crate::auto_clean::receipt_line() {
+        label(parent, &receipt, PAD_X, line_y, CONTENT_WIDTH, 16.0, 11.0, false, theme.ink_3, false, mtm);
+        line_y -= RECEIPT_H;
+    }
     if let Some(caveat) = footer_caveat(state) {
-        label(parent, &caveat, PAD_X, 46.0, CONTENT_WIDTH, 16.0, 11.5, false, theme.ink_3, false, mtm);
+        label(parent, &caveat, PAD_X, line_y, CONTENT_WIDTH, 16.0, 11.5, false, theme.ink_3, false, mtm);
     }
     let rescan = text_button_hint(parent, "Rescan", "\u{2318}R", PAD_X, 13.0, sel!(handleRescan:), target, TAG_RESCAN, theme.ink_2, theme.ink_4, mtm);
     set_cmd_key(&rescan, "r");

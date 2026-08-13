@@ -7,10 +7,11 @@
 
 use crate::disk::disk_space;
 use crate::nesting::Publisher;
-use crate::sizes::{dir_size_fallback, read_dir, Found, SizedTarget};
+use crate::sizes::{dir_measurement_fallback, read_dir, Found, Measurement, SizedTarget};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
+use std::time::SystemTime;
 
 /// Queue plus per-target tallies, under one lock. A directory read costs orders
 /// of magnitude more than the lock it takes to hand back what it found.
@@ -29,6 +30,7 @@ struct Queue {
     /// Directories queued or in flight for each target.
     outstanding: Vec<usize>,
     bytes: Vec<u64>,
+    last_modified: Vec<Option<SystemTime>>,
     /// A bulk read failed somewhere under this target, so its whole subtree is
     /// re-walked the slow way rather than reported short.
     broken: Vec<bool>,
@@ -81,6 +83,7 @@ impl Walk {
                 waiting: 0,
                 outstanding: vec![0; paths.len()],
                 bytes: vec![0; paths.len()],
+                last_modified: vec![None; paths.len()],
                 broken: vec![false; paths.len()],
             }),
             wake: Condvar::new(),
@@ -91,14 +94,23 @@ impl Walk {
         &self,
         paths: &[PathBuf],
         publisher: &Mutex<Publisher>,
+        modified: &Mutex<Vec<Option<SystemTime>>>,
         on_size: &impl Fn(SizedTarget),
     ) {
         while let Some((target, dir)) = self.take(paths) {
             for index in self.commit(target, read_dir(&dir)) {
-                let bytes = self.settle(&paths[index], index);
-                let settled = publisher.lock().unwrap().record(index, bytes);
+                let measurement = self.settle(&paths[index], index);
+                modified.lock().unwrap_or_else(|error| error.into_inner())[index] =
+                    measurement.last_modified;
+                let settled = publisher
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .record(index, measurement.bytes);
                 for (index, bytes) in settled {
-                    on_size(SizedTarget { index, bytes });
+                    let last_modified = modified
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())[index];
+                    on_size(SizedTarget { index, bytes, last_modified });
                 }
             }
         }
@@ -132,6 +144,7 @@ impl Walk {
         let mut queue = self.queue.lock().unwrap();
         queue.busy -= 1;
         queue.bytes[target] = queue.bytes[target].saturating_add(found.bytes);
+        queue.last_modified[target] = queue.last_modified[target].max(found.last_modified);
         queue.broken[target] |= found.broken;
         queue.outstanding[target] += found.subdirs.len();
         queue.outstanding[target] -= 1;
@@ -156,16 +169,17 @@ impl Walk {
 
     /// The target's raw size, held to what the volume could possibly hold. A
     /// bulk read that failed or overshot is redone with the slow walk.
-    fn settle(&self, root: &Path, index: usize) -> u64 {
-        let (bytes, broken) = {
+    fn settle(&self, root: &Path, index: usize) -> Measurement {
+        let (bytes, last_modified, broken) = {
             let queue = self.queue.lock().unwrap();
-            (queue.bytes[index], queue.broken[index])
+            (queue.bytes[index], queue.last_modified[index], queue.broken[index])
         };
         let limit = disk_space(root).map(|stats| stats.total_bytes);
         if !broken && limit.is_none_or(|max| bytes <= max) {
-            return bytes;
+            return Measurement { bytes, last_modified };
         }
-        let fallback = dir_size_fallback(root);
-        limit.map_or(fallback, |max| fallback.min(max))
+        let mut fallback = dir_measurement_fallback(root);
+        fallback.bytes = limit.map_or(fallback.bytes, |max| fallback.bytes.min(max));
+        fallback
     }
 }

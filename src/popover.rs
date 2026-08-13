@@ -58,6 +58,9 @@ pub fn toggle(mtm: MainThreadMarker) {
         close();
         return;
     }
+    // Publish first: a pass that removed rows while we were shut has to reach
+    // the state before the staleness test reads it.
+    crate::auto_clean::apply_pending_snapshot();
     // The tree is already current whenever a scan, a tick or a screen change
     // has rebuilt or patched it. Rebuilding here is what made the pointer
     // wait on the status item. Disk free space and row ages still go stale
@@ -68,6 +71,10 @@ pub fn toggle(mtm: MainThreadMarker) {
         let _ = crate::live::chrome_changed(mtm);
     }
     show(mtm);
+}
+
+pub fn is_open() -> bool {
+    POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|popover| popover.isShown()))
 }
 
 fn content_ready(mtm: MainThreadMarker) -> bool {
@@ -188,6 +195,11 @@ fn ensure_popover(mtm: MainThreadMarker) {
 }
 
 fn show(mtm: MainThreadMarker) {
+    let opening = crate::auto_clean::prepare_popover_opening();
+    show_permitted(mtm, opening);
+}
+
+fn show_permitted(mtm: MainThreadMarker, _opening: crate::auto_clean::PopoverOpening) {
     let _span = crate::trace::span("show");
     let button = with_state_ret(|state| state.status_item.button(mtm)).flatten();
     let Some(button) = button else { return };

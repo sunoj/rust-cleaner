@@ -1,7 +1,6 @@
-// Directory sizing for WD-40. A bounded pool (see `walk`) draws directories
-// from every target at once, so the largest target cannot serialise the scan,
-// and each size is handed back the moment it is final.
-// Exports: `SizedTarget`, `size_targets`, `scan_sizes`, `measure_dir`.
+// Directory sizing for WD-40. A bounded pool walks every target concurrently,
+// handing each size back as soon as it is final.
+// Exports: `SizedTarget`, `size_targets`, `scan_sizes`, directory measurement.
 // Deps: getattrlistbulk, walkdir, crate::{disk, nesting, scanner, walk}.
 
 use crate::disk::disk_space;
@@ -10,18 +9,19 @@ use crate::scanner::TargetDir;
 use crate::cache;
 use crate::walk::Walk;
 use getattrlistbulk::{DirReader, ObjectType, RequestedAttributes};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::SystemTime;
 use walkdir::WalkDir;
-
 
 const BULK_ATTRS: RequestedAttributes = RequestedAttributes {
     name: true,
     object_type: true,
     size: true,
     alloc_size: true,
-    modified_time: false,
+    modified_time: true,
     permissions: false,
     inode: false,
     entry_count: false,
@@ -33,6 +33,14 @@ const BULK_BUF: usize = 256 * 1024;
 pub struct SizedTarget {
     pub index: usize,
     pub bytes: u64,
+    pub last_modified: Option<SystemTime>,
+}
+
+/// Allocated bytes and the newest content timestamp found below one target.
+#[derive(Clone, Copy)]
+pub struct Measurement {
+    pub bytes: u64,
+    pub last_modified: Option<SystemTime>,
 }
 
 /// Measure every target, calling `on_size` once per target as its size settles.
@@ -46,22 +54,33 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
 
     // Anything already known goes to the publisher before the walk starts, so
     // a target enclosing one of them still settles correctly.
-    let known: Vec<bool> = targets
+    let cached: Vec<Option<(u64, SystemTime)>> = targets
         .iter()
-        .map(|target| cache::size_of(&target.path, target.kind).is_some())
+        .map(|target| cache::measurement_of(&target.path, target.kind))
         .collect();
-    for (index, target) in targets.iter().enumerate() {
-        let Some(bytes) = cache::size_of(&target.path, target.kind) else { continue };
-        let settled = publisher.lock().unwrap().record(index, bytes);
+    let modified = Mutex::new(vec![None; targets.len()]);
+    for (index, measurement) in cached.iter().copied().enumerate() {
+        let Some((bytes, last_modified)) = measurement else { continue };
+        modified.lock().unwrap_or_else(|error| error.into_inner())[index] = Some(last_modified);
+        let settled = publisher
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .record(index, bytes);
         for (index, bytes) in settled {
-            on_size(SizedTarget { index, bytes });
+            let last_modified = modified
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())[index];
+            on_size(SizedTarget { index, bytes, last_modified });
         }
     }
 
+    let known: Vec<bool> = cached.iter().map(Option::is_some).collect();
     let walk = Walk::new(&paths, &known);
     let remember = |sized: SizedTarget| {
         if let Some(target) = targets.get(sized.index) {
-            cache::put_size(&target.path, target.kind, sized.bytes);
+            if let Some(last_modified) = sized.last_modified {
+                cache::put_measurement(&target.path, target.kind, sized.bytes, last_modified);
+            }
         }
         on_size(sized);
     };
@@ -70,28 +89,36 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
             scope.spawn(|| {
                 // Housekeeping: never take the disk away from a build.
                 crate::qos::background();
-                walk.run(&paths, &publisher, &remember);
+                walk.run(&paths, &publisher, &modified, &remember);
             });
         }
     });
 }
 
 /// Blocking sizing for callers with nothing to show in the meantime (the CLI).
-pub fn scan_sizes(targets: &mut [TargetDir]) {
-    let settled = Mutex::new(vec![0_u64; targets.len()]);
+pub fn scan_sizes(targets: &mut [TargetDir]) -> HashMap<PathBuf, SystemTime> {
+    let initial = vec![(0_u64, None); targets.len()];
+    let settled = Mutex::new(initial);
     size_targets(targets, |sized| {
-        settled.lock().unwrap()[sized.index] = sized.bytes;
+        settled.lock().unwrap_or_else(|error| error.into_inner())[sized.index] = (sized.bytes, sized.last_modified);
     });
     let settled = settled.into_inner().unwrap_or_default();
-    for (target, bytes) in targets.iter_mut().zip(settled) {
+    let mut measured_ages = HashMap::new();
+    for (target, (bytes, last_modified)) in targets.iter_mut().zip(settled) {
         target.size_bytes = bytes;
+        if let Some(last_modified) = last_modified {
+            target.last_modified = last_modified;
+            measured_ages.insert(target.path.clone(), last_modified);
+        }
     }
     targets.sort_by_key(|target| std::cmp::Reverse(target.size_bytes));
+    measured_ages
 }
 
 /// What one directory contributed.
 pub(crate) struct Found {
     pub bytes: u64,
+    pub last_modified: Option<SystemTime>,
     pub subdirs: Vec<PathBuf>,
     pub broken: bool,
 }
@@ -100,19 +127,30 @@ pub(crate) struct Found {
 /// a target a failed removal actually took off, where spinning up the pool for
 /// a single path would cost more than the walk.
 pub fn measure_dir(path: &Path) -> u64 {
+    measure_dir_with_modified(path).bytes
+}
+
+/// Measure a target and retain the newest timestamp anywhere in its contents.
+pub fn measure_dir_with_modified(path: &Path) -> Measurement {
     let limit = disk_space(path).map(|stats| stats.total_bytes);
     let mut total: u64 = 0;
+    let mut last_modified = None;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let found = read_dir(&dir);
         if found.broken {
-            let fallback = dir_size_fallback(path);
-            return limit.map_or(fallback, |max| fallback.min(max));
+            let mut fallback = dir_measurement_fallback(path);
+            fallback.bytes = limit.map_or(fallback.bytes, |max| fallback.bytes.min(max));
+            return fallback;
         }
         total = total.saturating_add(found.bytes);
+        last_modified = last_modified.max(found.last_modified);
         stack.extend(found.subdirs);
     }
-    limit.map_or(total, |max| total.min(max))
+    Measurement {
+        bytes: limit.map_or(total, |max| total.min(max)),
+        last_modified,
+    }
 }
 
 pub(crate) fn read_dir(dir: &Path) -> Found {
@@ -122,15 +160,25 @@ pub(crate) fn read_dir(dir: &Path) -> Found {
         .follow_symlinks(false)
         .read();
     let Ok(entries) = entries else {
-        return Found { bytes: 0, subdirs: Vec::new(), broken: true };
+        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
     };
-    let mut found = Found { bytes: 0, subdirs: Vec::new(), broken: false };
+    let Some(last_modified) = std::fs::metadata(dir)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+    else {
+        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
+    };
+    let mut found = Found { bytes: 0, last_modified: Some(last_modified), subdirs: Vec::new(), broken: false };
     for entry in entries {
         let Ok(entry) = entry else {
             // Parse error — the data may be corrupt, so the whole target is
             // re-measured the slow way rather than half-counted.
-            return Found { bytes: 0, subdirs: Vec::new(), broken: true };
+            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
         };
+        let Some(modified) = entry.modified_time else {
+            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
+        };
+        found.last_modified = found.last_modified.max(Some(modified));
         match entry.object_type {
             Some(ObjectType::Directory) => found.subdirs.push(dir.join(&entry.name)),
             Some(ObjectType::Symlink) => {}
@@ -143,14 +191,20 @@ pub(crate) fn read_dir(dir: &Path) -> Found {
     found
 }
 
-pub(crate) fn dir_size_fallback(path: &Path) -> u64 {
-    WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok())
-        .map(|meta| meta.blocks().saturating_mul(512))
-        .fold(0_u64, u64::saturating_add)
+pub(crate) fn dir_measurement_fallback(path: &Path) -> Measurement {
+    let mut measurement = Measurement { bytes: 0, last_modified: None };
+    for entry in WalkDir::new(path).follow_links(false) {
+        let Ok(entry) = entry else { return incomplete(measurement.bytes) };
+        let Ok(metadata) = entry.metadata() else { return incomplete(measurement.bytes) };
+        let Ok(modified) = metadata.modified() else { return incomplete(measurement.bytes) };
+        measurement.bytes = measurement.bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        measurement.last_modified = measurement.last_modified.max(Some(modified));
+    }
+    measurement
+}
+
+fn incomplete(bytes: u64) -> Measurement {
+    Measurement { bytes, last_modified: None }
 }
 
 #[cfg(test)]
@@ -226,5 +280,19 @@ mod tests {
         let mut targets = vec![target(scratch("absent"))];
         scan_sizes(&mut targets);
         assert_eq!(targets[0].size_bytes, 0);
+    }
+
+    #[test]
+    fn newest_nested_content_replaces_the_target_directory_mtime() {
+        let root = scratch("content-age");
+        let nested = root.join("stable");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        let directory_mtime = std::fs::metadata(&root).and_then(|m| m.modified()).expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(nested.join("fresh"), b"new").expect("nested content");
+        let mut targets = vec![target(root.clone())];
+        scan_sizes(&mut targets);
+        assert!(targets[0].last_modified > directory_mtime);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -26,7 +26,7 @@ pub fn done_ack(mtm: MainThreadMarker) {
         state.done = None;
     });
     popover::refresh(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
 }
 
 pub fn show_more(mtm: MainThreadMarker) {
@@ -92,7 +92,7 @@ pub fn depth(sender: &NSButton, mtm: MainThreadMarker) {
     });
     settings_view::collapse_disclosure();
     popover::refresh(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
 }
 
 /// Switch one artifact group in or out of the scan. What is on screen came from
@@ -107,7 +107,7 @@ pub fn toggle_scan_group(sender: &NSButton, mtm: MainThreadMarker) {
         state.config.save();
     });
     popover::refresh(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
 }
 
 pub fn toggle_menu_bar_size(mtm: MainThreadMarker) {
@@ -129,7 +129,7 @@ pub fn add_scan_root(mtm: MainThreadMarker) {
         state.config.save();
     });
     popover::refresh(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
 }
 
 pub fn remove_scan_root(sender: &NSButton, mtm: MainThreadMarker) {
@@ -142,7 +142,7 @@ pub fn remove_scan_root(sender: &NSButton, mtm: MainThreadMarker) {
         state.config.save();
     });
     popover::refresh(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
 }
 
 pub fn toggle_login(mtm: MainThreadMarker) {

@@ -3,6 +3,7 @@
 // Deps: objc2 AppKit; UI in `popover` + views; work in `tasks`.
 
 mod actions;
+mod auto_clean;
 mod autostart;
 mod cache_names;
 mod can;
@@ -134,7 +135,7 @@ define_class!(
         #[unsafe(method(handleRescan:))]
         fn handle_rescan(&self, _sender: &AnyObject) {
             // start_scan must still see Done so it can leave that screen now.
-            tasks::start_scan(false);
+            tasks::start_scan();
         }
 
         #[unsafe(method(openSettings:))]
@@ -200,15 +201,13 @@ define_class!(
 
         #[unsafe(method(autoCleanTick:))]
         fn auto_clean_tick(&self, _sender: *mut AnyObject) {
-            if !tasks::is_busy() {
-                tasks::start_scan(true);
-            }
+            auto_clean::start();
         }
 
         #[unsafe(method(autoScanTick:))]
         fn auto_scan_tick(&self, _sender: *mut AnyObject) {
             if !tasks::is_busy() {
-                tasks::start_scan(false);
+                tasks::start_scan();
             }
         }
 
@@ -290,7 +289,7 @@ fn main() {
     });
 
     popover::attach(mtm);
-    tasks::start_scan(false);
+    tasks::start_scan();
     tasks::start_auto_scan();
     if auto_hours > 0 {
         tasks::start_auto_clean(auto_hours);
