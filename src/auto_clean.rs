@@ -28,6 +28,9 @@ pub fn start() {
         return;
     }
     let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
+    if config.max_age_days == 0 {
+        return;
+    }
     if !crate::tasks::claim_cleaning() {
         return;
     }
@@ -113,6 +116,9 @@ fn can_start(busy: bool, cleaning_screen: bool, popover_open: bool) -> bool {
 }
 
 fn candidate_indices(targets: &[TargetDir], config: &Config, now: SystemTime) -> Vec<usize> {
+    if config.max_age_days == 0 {
+        return Vec::new();
+    }
     let threshold = Duration::from_secs(config.max_age_days.saturating_mul(SECONDS_PER_DAY));
     targets
         .iter()
@@ -188,6 +194,14 @@ mod tests {
         let now = SystemTime::now();
         let config = Config { max_age_days: 7, ..Config::default() };
         let targets = vec![target(now, 6, ArtifactKind::RustTarget)];
+        assert!(candidate_indices(&targets, &config, now).is_empty());
+    }
+
+    #[test]
+    fn zero_keep_threshold_yields_no_auto_clean_candidates() {
+        let now = SystemTime::now();
+        let config = Config { max_age_days: 0, ..Config::default() };
+        let targets = vec![target(now, 30, ArtifactKind::RustTarget)];
         assert!(candidate_indices(&targets, &config, now).is_empty());
     }
 

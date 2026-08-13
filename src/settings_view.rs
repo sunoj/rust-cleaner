@@ -85,7 +85,11 @@ fn draw_scanning(
     y = section(parent, y, "SCANNING", theme, mtm);
     y = value_row(
         parent, y,
-        &Spec { title: "Auto clean", hint: None, action: sel!(settingsCycleInterval:) },
+        &Spec {
+            title: "Auto clean",
+            hint: auto_clean_hint(state.config.auto_clean_hours, state.config.max_age_days),
+            action: sel!(settingsCycleInterval:),
+        },
         Some(interval_label(state.config.auto_clean_hours)), theme, target, mtm,
     );
     let depth = format!("{} levels", state.config.max_depth);
@@ -234,6 +238,10 @@ fn interval_label(hours: u64) -> &'static str {
     INTERVALS.iter().find(|(h, _)| *h == hours).map(|(_, l)| *l).unwrap_or("custom")
 }
 
+fn auto_clean_hint(hours: u64, max_age_days: u64) -> Option<&'static str> {
+    (hours > 0 && max_age_days == 0).then_some("Paused: set keep-days above 0")
+}
+
 pub fn next_interval(current: u64) -> u64 {
     let idx = INTERVALS.iter().position(|(h, _)| *h == current).unwrap_or(0);
     INTERVALS[(idx + 1) % INTERVALS.len()].0
@@ -246,5 +254,17 @@ pub fn next_depth(current: usize) -> usize {
         4 => 5,
         5 => 6,
         _ => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_clean_hint;
+
+    #[test]
+    fn auto_clean_pause_hint_only_appears_when_enabled_without_a_threshold() {
+        assert_eq!(auto_clean_hint(1, 0), Some("Paused: set keep-days above 0"));
+        assert_eq!(auto_clean_hint(0, 0), None);
+        assert_eq!(auto_clean_hint(1, 7), None);
     }
 }
