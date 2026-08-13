@@ -26,7 +26,9 @@ export default {
     const key = keyFromPath(new URL(req.url).pathname);
     if (!key) return json({ error: "not found" }, 404);
 
-    if (req.method === "GET") return serveAsset(env.BUCKET, key);
+    // HEAD must answer like GET without a body; the runtime strips it. A
+    // downloader that checks before it fetches should not be told 404.
+    if (req.method === "GET" || req.method === "HEAD") return serveAsset(env.BUCKET, key);
     if (req.method === "PUT") return uploadAsset(req, env, key);
     return json({ error: "not found" }, 404);
   }
