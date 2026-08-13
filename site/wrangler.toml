@@ -1,0 +1,18 @@
+# Cloudflare Worker: serves wd-40.xyz as static assets, no code of its own.
+# custom_domain routes let wrangler write the zone's DNS records itself, which
+# `wrangler pages` cannot do at any version.
+# Deps: the wd-40.xyz zone on the same account, the page under public/.
+name = "wd-40-site"
+compatibility_date = "2026-06-01"
+
+[assets]
+directory = "public"
+not_found_handling = "404-page"
+
+[[routes]]
+pattern = "wd-40.xyz"
+custom_domain = true
+
+[[routes]]
+pattern = "www.wd-40.xyz"
+custom_domain = true
