@@ -99,14 +99,26 @@ the update menu item is simply absent there.
 Releases are published to a Cloudflare Worker + R2 relay (see [`relay/`](relay)):
 
 ```bash
-UPLOAD_SECRET=... make release VERSION=0.5.0 NOTES="What changed"
+make release VERSION=0.5.0 NOTES="What changed"
 ```
 
 `scripts/release.sh` builds the bundle, EdDSA-signs the zip with
-`.sparkle/bin/sign_update`, writes `appcast.xml`, and uploads both. The signing
-key lives in the login Keychain (service `https://sparkle-project.org`, account
-`ed25519`) and is **shared with sibling apps** — never run `generate_keys -f`,
-it would overwrite the single global key slot and break every feed.
+`.sparkle/bin/sign_update`, writes `appcast.xml`, and uploads both.
+
+Two secrets, both in the login Keychain. The signing key (service
+`https://sparkle-project.org`, account `ed25519`) is **shared with sibling
+apps** — never run `generate_keys -f`, it would overwrite the single global key
+slot and break every feed. The relay's upload secret (service `wd40-release`,
+account `UPLOAD_SECRET`) is read straight from the Keychain, so no release
+command needs it on the command line:
+
+```bash
+security add-generic-password -U -s wd40-release -a UPLOAD_SECRET -w
+```
+
+Setting `UPLOAD_SECRET` in the environment still overrides the Keychain for a
+one-off run. Whatever is stored here must match the Worker's own
+`UPLOAD_SECRET`; rotating means writing both.
 
 ## Performance
 

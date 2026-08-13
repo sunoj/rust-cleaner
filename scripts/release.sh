@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # Builds, signs, optionally notarizes, and publishes one Sparkle release of WD-40.
-# Usage: UPLOAD_SECRET=... ./scripts/release.sh <version> [release notes].
+# Usage: ./scripts/release.sh <version> [release notes].
+# The upload secret comes from the login keychain, or from UPLOAD_SECRET if set.
 
 set -euo pipefail
 
 VERSION="${1:?usage: release.sh <version> [notes]}"
 NOTES="${2:-Bug fixes and improvements.}"
-: "${UPLOAD_SECRET:?set UPLOAD_SECRET for the WD-40 release Worker}"
+
+# The Sparkle signing key already lives in the login keychain; the relay's
+# upload secret belongs beside it rather than in a shell that keeps history.
+KEYCHAIN_SERVICE="wd40-release"
+if [ -z "${UPLOAD_SECRET:-}" ]; then
+  UPLOAD_SECRET="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a UPLOAD_SECRET -w 2>/dev/null || true)"
+fi
+if [ -z "${UPLOAD_SECRET:-}" ]; then
+  echo "No upload secret. Store one in the login keychain:" >&2
+  echo "  security add-generic-password -U -s $KEYCHAIN_SERVICE -a UPLOAD_SECRET -w" >&2
+  echo "(or set UPLOAD_SECRET for this run)" >&2
+  exit 1
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
