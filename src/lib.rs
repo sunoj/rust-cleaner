@@ -15,3 +15,6 @@ pub mod scanner;
 pub mod sizes;
 pub mod toolchains;
 mod walk;
+
+#[cfg(test)]
+mod safety_tests;

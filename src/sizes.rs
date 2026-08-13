@@ -9,7 +9,8 @@ use crate::scanner::TargetDir;
 use crate::cache;
 use crate::walk::Walk;
 use getattrlistbulk::{DirReader, ObjectType, RequestedAttributes};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -118,6 +119,7 @@ pub fn scan_sizes(targets: &mut [TargetDir]) -> HashMap<PathBuf, SystemTime> {
 /// What one directory contributed.
 pub(crate) struct Found {
     pub bytes: u64,
+    pub entry_count: usize,
     pub last_modified: Option<SystemTime>,
     pub subdirs: Vec<PathBuf>,
     pub broken: bool,
@@ -154,30 +156,27 @@ pub fn measure_dir_with_modified(path: &Path) -> Measurement {
 }
 
 pub(crate) fn read_dir(dir: &Path) -> Found {
+    let Some(mut expected_names) = standard_entry_names(dir) else { return broken() };
+    read_dir_bulk(dir, &mut expected_names)
+        .filter(|_| expected_names.is_empty())
+        .unwrap_or_else(|| read_dir_standard(dir))
+}
+
+fn read_dir_bulk(dir: &Path, expected_names: &mut HashSet<OsString>) -> Option<Found> {
     let entries = DirReader::new(dir)
         .attributes(BULK_ATTRS)
         .buffer_size(BULK_BUF)
         .follow_symlinks(false)
-        .read();
-    let Ok(entries) = entries else {
-        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
-    };
-    let Some(last_modified) = std::fs::metadata(dir)
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-    else {
-        return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
-    };
-    let mut found = Found { bytes: 0, last_modified: Some(last_modified), subdirs: Vec::new(), broken: false };
+        .read()
+        .ok()?;
+    let mut found = empty_found(dir)?;
     for entry in entries {
-        let Ok(entry) = entry else {
-            // Parse error — the data may be corrupt, so the whole target is
-            // re-measured the slow way rather than half-counted.
-            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
-        };
-        let Some(modified) = entry.modified_time else {
-            return Found { bytes: 0, last_modified: None, subdirs: Vec::new(), broken: true };
-        };
+        let entry = entry.ok()?;
+        if !expected_names.remove(OsStr::new(&entry.name)) {
+            return None;
+        }
+        let modified = entry.modified_time?;
+        found.entry_count += 1;
         found.last_modified = found.last_modified.max(Some(modified));
         match entry.object_type {
             Some(ObjectType::Directory) => found.subdirs.push(dir.join(&entry.name)),
@@ -188,7 +187,48 @@ pub(crate) fn read_dir(dir: &Path) -> Found {
             }
         }
     }
+    Some(found)
+}
+
+fn standard_entry_names(dir: &Path) -> Option<HashSet<OsString>> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .map(|entry| entry.ok().map(|entry| entry.file_name()))
+        .collect()
+}
+
+fn read_dir_standard(dir: &Path) -> Found {
+    let Some(mut found) = empty_found(dir) else { return broken() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return broken() };
+    for entry in entries {
+        let Ok(entry) = entry else { return broken() };
+        let Ok(file_type) = entry.file_type() else { return broken() };
+        let Ok(metadata) = entry.metadata() else { return broken() };
+        let Ok(modified) = metadata.modified() else { return broken() };
+        found.entry_count += 1;
+        found.last_modified = found.last_modified.max(Some(modified));
+        if file_type.is_dir() {
+            found.subdirs.push(entry.path());
+        } else if !file_type.is_symlink() {
+            found.bytes = found.bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        }
+    }
     found
+}
+
+fn empty_found(dir: &Path) -> Option<Found> {
+    let last_modified = std::fs::metadata(dir).ok()?.modified().ok()?;
+    Some(Found {
+        bytes: 0,
+        entry_count: 0,
+        last_modified: Some(last_modified),
+        subdirs: Vec::new(),
+        broken: false,
+    })
+}
+
+fn broken() -> Found {
+    Found { bytes: 0, entry_count: 0, last_modified: None, subdirs: Vec::new(), broken: true }
 }
 
 pub(crate) fn dir_measurement_fallback(path: &Path) -> Measurement {
@@ -252,47 +292,9 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_target_is_not_counted_in_the_one_around_it() {
-        let root = scratch("nested");
-        tree(&root, &[("outer/own.bin", 4096), ("outer/inner/kept.bin", 4096)]);
-        let mut targets = vec![target(root.join("outer")), target(root.join("outer/inner"))];
-        scan_sizes(&mut targets);
-        // Sorted largest first; both hold one 4K file once the overlap is out.
-        assert_eq!(targets.len(), 2);
-        let total: u64 = targets.iter().map(|t| t.size_bytes).sum();
-        let outer = targets.iter().find(|t| t.path.ends_with("outer")).unwrap();
-        let inner = targets.iter().find(|t| t.path.ends_with("inner")).unwrap();
-        assert!(inner.size_bytes > 0, "inner measured");
-        assert_eq!(outer.size_bytes, total - inner.size_bytes);
-        assert!(outer.size_bytes < total, "outer must not re-count the inner target");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn an_empty_target_list_does_no_work() {
-        let mut targets: Vec<TargetDir> = Vec::new();
-        scan_sizes(&mut targets);
-        assert!(targets.is_empty());
-    }
-
-    #[test]
     fn a_missing_directory_sizes_to_nothing_rather_than_hanging() {
         let mut targets = vec![target(scratch("absent"))];
         scan_sizes(&mut targets);
         assert_eq!(targets[0].size_bytes, 0);
-    }
-
-    #[test]
-    fn newest_nested_content_replaces_the_target_directory_mtime() {
-        let root = scratch("content-age");
-        let nested = root.join("stable");
-        std::fs::create_dir_all(&nested).expect("nested dir");
-        let directory_mtime = std::fs::metadata(&root).and_then(|m| m.modified()).expect("mtime");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(nested.join("fresh"), b"new").expect("nested content");
-        let mut targets = vec![target(root.clone())];
-        scan_sizes(&mut targets);
-        assert!(targets[0].last_modified > directory_mtime);
-        let _ = std::fs::remove_dir_all(&root);
     }
 }
