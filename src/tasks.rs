@@ -38,7 +38,6 @@ const MIN_CLEAN_SCREEN: f64 = 2.0;
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
-static POST_SCAN_CLEAN: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
@@ -71,14 +70,12 @@ pub fn stop_requested() -> bool {
     STOP_AFTER.load(Ordering::Relaxed)
 }
 
-pub fn start_scan(then_clean: bool) {
+pub fn start_scan() {
     let Some(config) = with_state_ret(|state| state.config.clone()) else { return };
-    if SCANNING.swap(true, Ordering::Relaxed) {
+    if CLEANING.load(Ordering::Relaxed) || SCANNING.swap(true, Ordering::Relaxed) {
         return;
     }
-    if then_clean {
-        POST_SCAN_CLEAN.store(true, Ordering::Relaxed);
-    }
+    crate::auto_clean::discard_pending_snapshot();
     if let Some(mtm) = MainThreadMarker::new() {
         with_state(|state| {
             if state.screen == UiScreen::Done {
@@ -153,9 +150,6 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     start_reclaim();
     #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
-    if POST_SCAN_CLEAN.swap(false, Ordering::Relaxed) {
-        spawn_clean_selected();
-    }
 }
 
 /// Work out what the targets really occupy on the device. One `open` per file
@@ -201,7 +195,7 @@ pub fn on_reclaim_done(mtm: MainThreadMarker) {
 pub fn spawn_clean_selected() {
     let Some(job) = gather_job() else { return };
     let CleanJob { items, skipped_count, skipped_bytes, reference } = job;
-    if items.is_empty() || CLEANING.swap(true, Ordering::Relaxed) {
+    if items.is_empty() || !claim_cleaning() {
         return;
     }
     STOP_AFTER.store(false, Ordering::Relaxed);
@@ -242,6 +236,14 @@ pub fn spawn_clean_selected() {
     });
 }
 
+pub(crate) fn claim_cleaning() -> bool {
+    !CLEANING.swap(true, Ordering::Relaxed)
+}
+
+pub(crate) fn finish_cleaning() {
+    CLEANING.store(false, Ordering::Relaxed);
+}
+
 pub fn on_progress(mtm: MainThreadMarker) {
     PROGRESS_HOP.store(false, Ordering::SeqCst);
     let snapshot = PROGRESS.lock().unwrap().clone();
@@ -263,7 +265,7 @@ pub fn request_stop() {
 }
 
 pub fn on_clean_done(mtm: MainThreadMarker) {
-    CLEANING.store(false, Ordering::Relaxed);
+    finish_cleaning();
     *PENDING_DONE.lock().unwrap() = DONE_RESULT.lock().unwrap().take();
     // The last thing the run published is what really happened. It goes on
     // screen before anything is held back, so a held screen is a finished one:

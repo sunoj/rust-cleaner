@@ -51,8 +51,13 @@ pub fn toggle(mtm: MainThreadMarker) {
         close();
         return;
     }
+    crate::auto_clean::apply_pending_snapshot();
     refresh(mtm);
     show(mtm);
+}
+
+pub fn is_open() -> bool {
+    POPOVER.with(|cell| cell.borrow().as_ref().is_some_and(|popover| popover.isShown()))
 }
 
 pub fn close() {
