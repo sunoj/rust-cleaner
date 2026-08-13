@@ -190,6 +190,27 @@ mod tests {
     }
 
     #[test]
+    fn membership_ignores_how_old_a_target_is() {
+        let now = SystemTime::now();
+        let young = TargetDir {
+            path: PathBuf::from("/w/a/target"),
+            size_bytes: 9,
+            last_modified: now,
+            kind: ArtifactKind::RustTarget,
+        };
+        let old = TargetDir {
+            last_modified: now
+                .checked_sub(std::time::Duration::from_secs(3 * 86_400))
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            ..young.clone()
+        };
+        assert_eq!(
+            Membership::of(&[young], &HashSet::new(), 10),
+            Membership::of(&[old], &HashSet::new(), 10),
+        );
+    }
+
+    #[test]
     fn a_nonzero_size_leaves_membership_alone() {
         let unmeasured = vec![
             target("/w/a/target", ArtifactKind::RustTarget, 0),

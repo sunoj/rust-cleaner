@@ -2,7 +2,7 @@
 // arriving or a tile coming off the plate repaints those instead of rebuilding
 // the popover. The old full rebuild also threw away the scroll position, the
 // hover and the spray in flight, which is why those states jumped.
-// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, `scan_matches`, the `*_changed` hooks.
+// Exports: `Zone`, `Scan`, `Clean`, `install_*`, `clear`, `scan_matches`, `chrome_changed`, the `*_changed` hooks.
 // Deps: crate view modules + state + theme; objc2 AppKit.
 
 use crate::checkbox::CheckBox;
@@ -66,6 +66,8 @@ pub struct Row {
     pub check: CheckBox,
     /// Accent bar behind the row, drawn to the size's share of the largest row.
     pub wash: Retained<NSBox>,
+    /// Second line: kind and age. Ages go stale while the popover is shut.
+    pub age: Retained<NSTextField>,
 }
 
 pub struct Group {
@@ -200,6 +202,25 @@ pub fn totals_changed(mtm: MainThreadMarker) -> bool {
             let held = cell.borrow();
             let Some(scan) = held.as_ref() else { return false };
             redraw_scan_frame(scan, state, target, mtm);
+            true
+        })
+    })
+}
+
+/// Disk free space and row ages go stale while the popover is shut. Membership
+/// is unchanged, so the tree stays; only the header and the age strings move.
+pub fn chrome_changed(mtm: MainThreadMarker) -> bool {
+    let _span = crate::trace::span("chrome_changed");
+    patch(UiScreen::Scan, |state, _target| {
+        SCAN.with(|cell| {
+            let held = cell.borrow();
+            let Some(scan) = held.as_ref() else { return false };
+            redraw_scan_header(scan, state, mtm);
+            for row in &scan.rows {
+                if let Some(target) = state.targets.get(row.index) {
+                    crate::scan_rows::show_age(&row.age, target);
+                }
+            }
             true
         })
     })

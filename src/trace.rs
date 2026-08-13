@@ -175,6 +175,9 @@ fn run_bench() {
     let totals_us = time_repeat("totals_changed", 12, || {
         let _ = live::totals_changed(mtm);
     });
+    let chrome_us = time_repeat("chrome_changed", 12, || {
+        let _ = live::chrome_changed(mtm);
+    });
 
     with_state(|state| state.show_all = true);
     let refresh_all_us = time_repeat("refresh-show-all", 4, || {
@@ -193,7 +196,7 @@ fn run_bench() {
     });
 
     eprintln!(
-        "wd40-perf bench summary rows={} refresh_ms={:.2} show_first_ms={show_first_ms:.2} show_again_ms={show_again_ms:.2} reopen_old_ms={reopen_old_ms:.2} reopen_new_ms={reopen_new_ms:.2} status_us={status_us:.1} hover_enter_us={hover_enter_us:.1} hover_exit_us={hover_exit_us:.1} hover_paint_us={hover_paint_us:.1} sizes_arrived_us={sizes_us:.1} sizes_settled_us={sizes_settled_us:.1} selection_us={select_us:.1} totals_us={totals_us:.1} show_all_rows={} refresh_all_ms={:.2} hover_paint_all_us={:.1}",
+        "wd40-perf bench summary rows={} refresh_ms={:.2} show_first_ms={show_first_ms:.2} show_again_ms={show_again_ms:.2} reopen_old_ms={reopen_old_ms:.2} reopen_new_ms={reopen_new_ms:.2} status_us={status_us:.1} hover_enter_us={hover_enter_us:.1} hover_exit_us={hover_exit_us:.1} hover_paint_us={hover_paint_us:.1} sizes_arrived_us={sizes_us:.1} sizes_settled_us={sizes_settled_us:.1} selection_us={select_us:.1} totals_us={totals_us:.1} chrome_us={chrome_us:.1} show_all_rows={} refresh_all_ms={:.2} hover_paint_all_us={:.1}",
         rows.len(),
         refresh_us / 1000.0,
         all_rows.len(),

@@ -60,9 +60,12 @@ pub fn toggle(mtm: MainThreadMarker) {
     }
     // The tree is already current whenever a scan, a tick or a screen change
     // has rebuilt or patched it. Rebuilding here is what made the pointer
-    // wait on the status item.
+    // wait on the status item. Disk free space and row ages still go stale
+    // while the popover is shut, so those patch through the live handles.
     if !content_ready(mtm) {
         refresh(mtm);
+    } else {
+        let _ = crate::live::chrome_changed(mtm);
     }
     show(mtm);
 }

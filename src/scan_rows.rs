@@ -71,6 +71,12 @@ pub fn show_group_size(field: &NSTextField, bytes: u64, settled: bool) {
     field.setStringValue(&NSString::from_str(&format!("{prefix}{}", scan_size(bytes))));
 }
 
+/// The kind · age line. A reopen calls this so "2d ago" can become "3d ago"
+/// without rebuilding the row.
+pub fn show_age(field: &NSTextField, target: &TargetDir) {
+    field.setStringValue(&NSString::from_str(&meta(target)));
+}
+
 /// How wide the size wash is for `bytes` against the largest row on screen.
 pub fn wash_frame(bytes: u64, max_size: u64) -> NSRect {
     let fraction = bytes as f64 / max_size.max(1) as f64;
@@ -136,7 +142,7 @@ pub fn draw_row(
     // says so, where a hard clip reads as a name that happens to look odd.
     name.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     let recent = is_recent(model.target, model.max_age_days);
-    draw_detail(&row, model, recent, theme, mtm);
+    let age = draw_detail(&row, model, recent, theme, mtm);
     if recent {
         draw_recent_badge(&row, theme, mtm);
     }
@@ -148,7 +154,7 @@ pub fn draw_row(
         &row, REVEAL_X, (ROW_H - REVEAL_SIDE) / 2.0, sel!(handleRevealItem:), target,
         crate::scan_view::TAG_REVEAL_BASE + model.index as isize, theme.ink_3, mtm,
     );
-    (y, Row { index: model.index, size, check, wash })
+    (y, Row { index: model.index, size, check, wash, age })
 }
 
 /// The line under the name: what the row is, and — while the pointer is on it —
@@ -160,7 +166,7 @@ fn draw_detail(
     recent: bool,
     theme: &Theme,
     mtm: MainThreadMarker,
-) {
+) -> Retained<NSTextField> {
     let width = if recent { DETAIL_W_BADGE } else { DETAIL_W };
     let rest = meta(model.target);
     let path = display_path(&model.target.path);
@@ -169,6 +175,7 @@ fn draw_detail(
     field.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
     row.set_detail(&field, &rest, &path);
     row.setToolTip(Some(&NSString::from_str(&model.target.path.to_string_lossy())));
+    field
 }
 
 fn draw_wash(
@@ -196,4 +203,35 @@ fn draw_recent_badge(row: &NSView, theme: &Theme, mtm: MainThreadMarker) {
     badge.setBorderWidth(1.0);
     badge.setBorderColor(&Theme::color_alpha(theme.warn, 0.35));
     label_tracked(row, "RECENT", PAD_X + 186.0, 5.0, 54.0, 13.0, 10.0, false, theme.warn, true, 0.4, mtm);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::meta;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+    use wd40::scanner::{ArtifactKind, TargetDir};
+
+    fn target(kind: ArtifactKind, modified: SystemTime) -> TargetDir {
+        TargetDir {
+            path: PathBuf::from("/w/a/target"),
+            size_bytes: 1,
+            last_modified: modified,
+            kind,
+        }
+    }
+
+    #[test]
+    fn a_row_age_moves_from_today_to_days() {
+        let now = SystemTime::now();
+        assert_eq!(meta(&target(ArtifactKind::RustTarget, now)), "target \u{00b7} today");
+        let three = now.checked_sub(Duration::from_secs(3 * 86_400)).expect("clock");
+        assert_eq!(meta(&target(ArtifactKind::RustTarget, three)), "target \u{00b7} 3d ago");
+    }
+
+    #[test]
+    fn a_cache_row_has_no_age_to_go_stale() {
+        let line = meta(&target(ArtifactKind::Cache, SystemTime::UNIX_EPOCH));
+        assert_eq!(line, "cache \u{00b7} network downloads to rebuild");
+    }
 }
