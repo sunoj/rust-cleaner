@@ -35,9 +35,11 @@ const AUTO_SCAN_INTERVAL: f64 = 10.0 * 60.0;
 /// screen alone: removal starts the instant it is asked for, nothing waits on
 /// it, and every figure on the held screen is the finished one.
 const MIN_CLEAN_SCREEN: f64 = 2.0;
+const SCAN_MOTION_INTERVAL: f64 = 0.1;
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
+static DISCOVERING: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
@@ -59,10 +61,50 @@ thread_local! {
     /// Runs out the rest of the cleaning screen's minimum time. It carries no
     /// work; the run is already over by the time it is scheduled.
     static HOLD_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+    static SCAN_MOTION_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub fn is_busy() -> bool {
     CLEANING.load(Ordering::Relaxed) || SCANNING.load(Ordering::Relaxed)
+}
+
+pub fn is_scanning() -> bool {
+    SCANNING.load(Ordering::Relaxed)
+}
+
+pub fn is_discovering() -> bool {
+    DISCOVERING.load(Ordering::Relaxed)
+}
+
+pub(crate) fn scan_popover_opened() {
+    if !SCANNING.load(Ordering::Relaxed)
+        || !popover::is_open()
+        || !crate::motion::scan_motion_allowed()
+    {
+        return;
+    }
+    schedule(&SCAN_MOTION_TIMER, SCAN_MOTION_INTERVAL, sel!(scanMotionTick:), true);
+    crate::motion::scan_tick();
+}
+
+pub(crate) fn scan_popover_closed() {
+    stop_scan_motion();
+}
+
+fn stop_scan_motion() {
+    stop_timer(&SCAN_MOTION_TIMER);
+    crate::motion::stop_scan();
+}
+
+pub fn on_scan_motion_tick(_mtm: MainThreadMarker) {
+    if !SCANNING.load(Ordering::Relaxed)
+        || !popover::is_open()
+        || !crate::motion::scan_motion_allowed()
+    {
+        stop_scan_motion();
+        return;
+    }
+    crate::motion::scan_tick();
 }
 
 /// True once the user has asked the current run to stop starting new targets.
@@ -86,6 +128,7 @@ pub fn start_scan() {
     if CLEANING.load(Ordering::Relaxed) || SCANNING.swap(true, Ordering::Relaxed) {
         return;
     }
+    DISCOVERING.store(true, Ordering::Relaxed);
     crate::auto_clean::discard_pending_snapshot();
     crate::auto_clean::clear_receipt();
     if let Some(mtm) = MainThreadMarker::new() {
@@ -97,9 +140,11 @@ pub fn start_scan() {
             was
         })
         .unwrap_or(false);
-        // Only Done has to change now; on_scan_done rebuilds the list.
-        if left_done {
+        // An open scan needs the in-progress copy immediately; a closed one
+        // catches the same state through popover::content_ready on reopen.
+        if left_done || popover::is_open() {
             popover::refresh(mtm);
+            scan_popover_opened();
         }
     }
     std::thread::spawn(move || {
@@ -109,11 +154,14 @@ pub fn start_scan() {
 }
 
 pub fn on_scan_done(mtm: MainThreadMarker) {
+    DISCOVERING.store(false, Ordering::Relaxed);
     // A new scan replaces the rows, so the remembered offset would point at
     // targets that are no longer there.
     crate::scrolling::reset_scroll();
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
+        stop_scan_motion();
+        popover::refresh(mtm);
         return;
     };
     SIZES.lock().unwrap().clear();
@@ -160,6 +208,7 @@ pub fn on_sizes_tick(mtm: MainThreadMarker) {
 
 pub fn on_sizes_done(mtm: MainThreadMarker) {
     SCANNING.store(false, Ordering::Relaxed);
+    stop_scan_motion();
     on_sizes_tick(mtm);
     // Only now is there a full set of figures to sort by, so this is the one
     // point at which rows are allowed to move.

@@ -28,6 +28,7 @@ thread_local! {
     /// Rust-tint bucket last drawn into the status item, so a size tick that
     /// stays in the same band does not lockFocus a new glyph.
     static ICON_BUCKET: std::cell::Cell<u8> = const { std::cell::Cell::new(u8::MAX) };
+    static BUILT_SCANNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Wire the status button to toggle the popover instead of showing an NSMenu.
@@ -85,12 +86,15 @@ fn content_ready(mtm: MainThreadMarker) -> bool {
         if state.screen == UiScreen::Scan && !crate::live::scan_matches(state) {
             return false;
         }
+        let scanning = state.screen == UiScreen::Scan && crate::tasks::is_scanning();
         BUILT_DARK.with(|cell| cell.get() == Some(status_theme(state, mtm).dark))
+            && BUILT_SCANNING.with(|cell| cell.get() == scanning)
     });
     ready.unwrap_or(false)
 }
 
 pub fn close() {
+    crate::tasks::scan_popover_closed();
     POPOVER.with(|cell| {
         if let Some(popover) = cell.borrow().as_ref() {
             popover.close();
@@ -138,6 +142,8 @@ pub fn refresh(mtm: MainThreadMarker) {
     });
     let dark = with_state_ret(|state| status_theme(state, mtm).dark);
     BUILT_DARK.with(|cell| cell.set(dark));
+    let scanning = with_state_ret(|state| state.screen == UiScreen::Scan && crate::tasks::is_scanning()).unwrap_or(false);
+    BUILT_SCANNING.with(|cell| cell.set(scanning));
     if was_shown {
         show(mtm);
     }
@@ -197,6 +203,7 @@ fn ensure_popover(mtm: MainThreadMarker) {
 fn show(mtm: MainThreadMarker) {
     let opening = crate::auto_clean::prepare_popover_opening();
     show_permitted(mtm, opening);
+    crate::tasks::scan_popover_opened();
 }
 
 fn show_permitted(mtm: MainThreadMarker, _opening: crate::auto_clean::PopoverOpening) {

@@ -231,6 +231,11 @@ define_class!(
             tasks::on_sizes_done(self.mtm());
         }
 
+        #[unsafe(method(scanMotionTick:))]
+        fn scan_motion_tick(&self, _sender: *mut AnyObject) {
+            tasks::on_scan_motion_tick(self.mtm());
+        }
+
         #[unsafe(method(cleanDone:))]
         fn clean_done(&self, _sender: *mut AnyObject) {
             tasks::on_clean_done(self.mtm());

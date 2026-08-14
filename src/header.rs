@@ -94,11 +94,16 @@ pub struct ScanHeader {
     pub reclaimable: u64,
     pub measured: usize,
     pub total: usize,
+    pub discovering: bool,
 }
 
 impl ScanHeader {
     pub fn sizing(&self) -> bool {
-        self.measured < self.total
+        self.total > 0 && self.measured < self.total
+    }
+
+    pub fn in_progress(&self) -> bool {
+        self.discovering || self.sizing()
     }
 
     /// Marks a total that is still being added to.
@@ -116,6 +121,15 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     add_line(parent, 0.0, y, widgets::POPOVER_WIDTH, theme.line, mtm);
     let Some(disk) = model.disk else {
         label(parent, "Disk unavailable", PAD_X, y_top - 38.0, CONTENT_WIDTH, 24.0, 14.0, false, theme.ink_2, false, mtm);
+        if model.in_progress() {
+            let detail = if model.discovering {
+                "Finding build artifacts\u{2026}"
+            } else {
+                "Measuring build artifacts\u{2026}"
+            };
+            label(parent, detail, PAD_X, y_top - 72.0, 230.0, 16.0, 11.5, false, theme.ink_3, true, mtm);
+            crate::motion::scan_indicator(parent, CONTENT_WIDTH - 16.0, y_top - 76.0, mtm);
+        }
         return;
     };
 
@@ -140,10 +154,20 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
 
     let after = disk.free_bytes.saturating_add(reclaimable).min(disk.total_bytes);
     let bound = if model.sizing() { "at least " } else { "" };
-    label(parent, &format!("\u{2192} {bound}{} free after cleaning", scan_size(after)), PAD_X, y_top - 112.0, 230.0, 16.0, 11.5, false, theme.ink_3, true, mtm);
+    let detail = if model.discovering {
+        "Finding build artifacts\u{2026}".to_string()
+    } else if model.sizing() {
+        "Measuring build artifacts\u{2026}".to_string()
+    } else {
+        format!("\u{2192} {bound}{} free after cleaning", scan_size(after))
+    };
+    label(parent, &detail, PAD_X, y_top - 112.0, 230.0, 16.0, 11.5, false, theme.ink_3, true, mtm);
     if model.sizing() {
         let counted = format!("{} of {} measured", model.measured, model.total);
         label_right(parent, &counted, PAD_X + 230.0, y_top - 112.0, CONTENT_WIDTH - 230.0, 16.0, 11.5, theme.ink_3, true, mtm);
+    }
+    if model.in_progress() {
+        crate::motion::scan_indicator(parent, CONTENT_WIDTH - 16.0, y_top - 116.0, mtm);
     }
 }
 
