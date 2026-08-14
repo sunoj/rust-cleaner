@@ -9,7 +9,7 @@ use objc2_app_kit::NSStatusItem;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use wd40::config::Config;
 use wd40::disk::{disk_space, sum_bytes, DiskSpace};
 use wd40::reclaim::Reclaim;
@@ -129,6 +129,13 @@ pub(crate) struct AppState {
     pub reclaim: Option<Reclaim>,
 }
 
+fn apply_size_to_target(target: &mut TargetDir, bytes: u64, last_modified: Option<SystemTime>) {
+    target.size_bytes = bytes;
+    if let Some(last_modified) = last_modified {
+        target.last_modified = last_modified;
+    }
+}
+
 impl AppState {
     /// True while sizes are still arriving, so every total on screen is a floor
     /// rather than an answer.
@@ -191,9 +198,9 @@ impl AppState {
     /// Record one settled size. Row order is deliberately left alone until the
     /// pass is over: re-sorting on every arrival would shuffle the list under
     /// the pointer while the user is reading it.
-    pub fn apply_size(&mut self, index: usize, bytes: u64) {
+    pub fn apply_size(&mut self, index: usize, bytes: u64, last_modified: Option<SystemTime>) {
         if let Some(target) = self.targets.get_mut(index) {
-            target.size_bytes = bytes;
+            apply_size_to_target(target, bytes, last_modified);
             self.measured.insert(index);
         }
     }
@@ -258,4 +265,27 @@ pub(crate) fn with_state<F: FnOnce(&mut AppState)>(f: F) {
 
 pub(crate) fn with_state_ret<F: FnOnce(&mut AppState) -> R, R>(f: F) -> Option<R> {
     APP_STATE.with(|cell| cell.borrow_mut().as_mut().map(f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_size_to_target;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+    use wd40::scanner::{ArtifactKind, TargetDir};
+
+    #[test]
+    fn applying_a_settled_size_keeps_the_descendant_timestamp() {
+        let original = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
+        let descendant = SystemTime::UNIX_EPOCH + Duration::from_secs(9);
+        let mut target = TargetDir {
+            path: PathBuf::from("target"),
+            size_bytes: 0,
+            last_modified: original,
+            kind: ArtifactKind::RustTarget,
+        };
+        apply_size_to_target(&mut target, 11, Some(descendant));
+        assert_eq!(target.size_bytes, 11);
+        assert_eq!(target.last_modified, descendant);
+    }
 }

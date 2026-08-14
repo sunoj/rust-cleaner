@@ -33,8 +33,7 @@ pub fn ttl(kind: ArtifactKind) -> Duration {
 
 /// The device-byte pass is expensive wherever its inputs came from, so it is
 /// kept longer than any single directory — and guarded by a fingerprint of
-/// every path and size that went into it, which catches a change the clock
-/// would not.
+/// every path, size, and newest descendant timestamp that went into it.
 const ATTRIBUTION_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Paths kept on disk. A developer's machine turns over build directories
@@ -62,7 +61,7 @@ struct Sized_ {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Attributed {
-    fingerprint: Vec<(String, u64)>,
+    fingerprint: Vec<(String, u64, u64)>,
     measured: u64,
     value: Attribution,
 }
@@ -121,9 +120,11 @@ pub fn forget(path: &Path) {
     });
 }
 
-/// The device-byte accounting, if it was made from exactly these paths at
-/// exactly these sizes and is still within its TTL.
-pub fn attribution_for(fingerprint: &[(PathBuf, u64)]) -> Option<Attribution> {
+/// The device-byte accounting, if it was made from exactly these paths, sizes,
+/// and newest descendant timestamps and is still within its TTL. The timestamp
+/// is activity evidence, not proof that physical extents stayed unchanged:
+/// filesystem timestamps can be coarse and a writer can restore them.
+pub fn attribution_for(fingerprint: &[(PathBuf, u64, u64)]) -> Option<Attribution> {
     let wanted = printable(fingerprint);
     let guard = STORE.lock().ok()?;
     let kept = guard.as_ref()?.attribution.as_ref()?;
@@ -131,7 +132,7 @@ pub fn attribution_for(fingerprint: &[(PathBuf, u64)]) -> Option<Attribution> {
     (kept.fingerprint == wanted && fresh).then(|| kept.value.clone())
 }
 
-pub fn put_attribution(fingerprint: &[(PathBuf, u64)], value: Attribution) {
+pub fn put_attribution(fingerprint: &[(PathBuf, u64, u64)], value: Attribution) {
     let printed = printable(fingerprint);
     with_store(|store| {
         store.attribution = Some(Attributed {
@@ -195,10 +196,12 @@ fn with_store(edit: impl FnOnce(&mut Store)) {
     }
 }
 
-fn printable(fingerprint: &[(PathBuf, u64)]) -> Vec<(String, u64)> {
+fn printable(fingerprint: &[(PathBuf, u64, u64)]) -> Vec<(String, u64, u64)> {
     fingerprint
         .iter()
-        .map(|(path, bytes)| (path.to_string_lossy().into_owned(), *bytes))
+        .map(|(path, bytes, content_modified)| {
+            (path.to_string_lossy().into_owned(), *bytes, *content_modified)
+        })
         .collect()
 }
 

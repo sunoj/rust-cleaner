@@ -2,7 +2,6 @@
 // handing each size back as soon as it is final.
 // Exports: `SizedTarget`, `size_targets`, `scan_sizes`, directory measurement.
 // Deps: getattrlistbulk, walkdir, crate::{disk, nesting, scanner, walk}.
-
 use crate::disk::disk_space;
 use crate::nesting::Publisher;
 use crate::scanner::TargetDir;
@@ -16,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 use walkdir::WalkDir;
-
 const BULK_ATTRS: RequestedAttributes = RequestedAttributes {
     name: true,
     object_type: true,
@@ -77,7 +75,8 @@ pub fn size_targets(targets: &[TargetDir], on_size: impl Fn(SizedTarget) + Sync)
 
     let known: Vec<bool> = cached.iter().map(Option::is_some).collect();
     let walk = Walk::new(&paths, &known);
-    let remember = |sized: SizedTarget| {
+    let remember = |mut sized: SizedTarget| {
+        sized.last_modified = sized.last_modified.map(|modified| modified.min(SystemTime::now()));
         if let Some(target) = targets.get(sized.index) {
             if let Some(last_modified) = sized.last_modified {
                 cache::put_measurement(&target.path, target.kind, sized.bytes, last_modified);
@@ -143,6 +142,7 @@ pub fn measure_dir_with_modified(path: &Path) -> Measurement {
         if found.broken {
             let mut fallback = dir_measurement_fallback(path);
             fallback.bytes = limit.map_or(fallback.bytes, |max| fallback.bytes.min(max));
+            fallback.last_modified = fallback.last_modified.map(|modified| modified.min(SystemTime::now()));
             return fallback;
         }
         total = total.saturating_add(found.bytes);
@@ -151,7 +151,7 @@ pub fn measure_dir_with_modified(path: &Path) -> Measurement {
     }
     Measurement {
         bytes: limit.map_or(total, |max| total.min(max)),
-        last_modified,
+        last_modified: last_modified.map(|modified| modified.min(SystemTime::now())),
     }
 }
 
