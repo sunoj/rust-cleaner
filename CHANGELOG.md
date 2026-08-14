@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2] — 2026-08-14
+
+### Fixed
+- **The scan no longer claims the disk is clean while it is still looking** (`src/scan_view.rs`, `src/tasks.rs`): during discovery there are no targets yet, which made `AppState::sizing()` false, which let the empty state draw. For the whole of that window the popover read "Nothing to clean — everything is tidy", and then filled with gigabytes.
+
+### Added
+- **The scan says what it is doing** (`src/header.rs`, `src/motion.rs`): "Finding build artifacts…" while it discovers, "Measuring build artifacts…" while it sizes, beside the count that was already there. One native spinner keeps moving through the stalls — sizing is I/O bound, and a single large target can go seconds without a figure to report. Under Reduce Motion there is no spinner at all, only the words.
+
 ## [0.6.1] — 2026-08-14
 
 ### Added
