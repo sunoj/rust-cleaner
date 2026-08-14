@@ -9,7 +9,7 @@ const PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]
 const BUILD_PATTERN = new RegExp(
   `^wd40-${CORE_IDENTIFIER}\\.${CORE_IDENTIFIER}\\.${CORE_IDENTIFIER}` +
   `(?:-${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*)?` +
-  "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?\\.zip$"
+  "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?\\.(?:zip|dmg)$"
 );
 const MIN_UPLOAD_BYTES = 10;
 const MAX_UPLOAD_BYTES = 200_000_000;
@@ -48,7 +48,7 @@ async function serveAsset(bucket, key) {
   return new Response(obj.body, {
     headers: {
       ...CORS,
-      "content-type": isAppcast ? "application/xml" : "application/zip",
+      "content-type": isAppcast ? "application/xml" : contentTypeFor(key),
       "cache-control": isAppcast
         ? "public, max-age=300"
         : "public, max-age=31536000, immutable"
@@ -68,9 +68,14 @@ async function uploadAsset(req, env, key) {
   }
 
   await env.BUCKET.put(key, req.body, {
-    httpMetadata: { contentType: key === APPCAST_KEY ? "application/xml" : "application/zip" }
+    httpMetadata: { contentType: key === APPCAST_KEY ? "application/xml" : contentTypeFor(key) }
   });
   return json({ ok: true, key, bytes: declaredSize });
+}
+
+/// Sparkle updates from the zip; the disk image is what a person downloads.
+function contentTypeFor(key) {
+  return key.endsWith(".dmg") ? "application/x-apple-diskimage" : "application/zip";
 }
 
 function isValidSize(bytes) {

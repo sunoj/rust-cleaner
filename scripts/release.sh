@@ -30,6 +30,7 @@ MIN_OS="13.0"
 BUILD="$(date +%Y%m%d%H%M)"
 OUT_DIR="dist"
 ZIP="wd40-$VERSION.zip"
+DMG="wd40-$VERSION.dmg"
 APP="dist/WD-40.app"
 
 CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
@@ -53,7 +54,21 @@ else
   printf 'NOTE: Ad-hoc signed; Gatekeeper may warn on first launch.\n'
 fi
 
+# Sparkle updates from the zip. People download the disk image: a zip lands in
+# ~/Downloads and gets run from there, and a quarantined app run in place is
+# translocated to a read-only path where Sparkle cannot replace it. The
+# Applications symlink is what makes dragging it out the obvious move.
 /usr/bin/ditto -c -k --keepParent "$APP" "$OUT_DIR/$ZIP"
+
+STAGE="$OUT_DIR/dmg-$VERSION"
+rm -rf "$STAGE" "$OUT_DIR/$DMG"
+mkdir -p "$STAGE"
+/usr/bin/ditto "$APP" "$STAGE/WD-40.app"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname "WD-40 $VERSION" -srcfolder "$STAGE" -ov -format UDZO \
+  -quiet "$OUT_DIR/$DMG"
+rm -rf "$STAGE"
+
 SIG_LINE="$("$SIGN_UPDATE" "$OUT_DIR/$ZIP")"
 LENGTH="$(printf '%s' "$SIG_LINE" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
 
@@ -89,10 +104,16 @@ curl -fsS -X PUT "$RELAY/$ZIP" \
   -H "authorization: Bearer $UPLOAD_SECRET" \
   -H "content-type: application/zip" \
   --data-binary "@$OUT_DIR/$ZIP" >/dev/null
+curl -fsS -X PUT "$RELAY/$DMG" \
+  -H "authorization: Bearer $UPLOAD_SECRET" \
+  -H "content-type: application/x-apple-diskimage" \
+  --data-binary "@$OUT_DIR/$DMG" >/dev/null
+# The feed goes last: it is the only file that makes the others discoverable,
+# so publishing it before them would advertise a build nobody can fetch.
 curl -fsS -X PUT "$RELAY/appcast.xml" \
   -H "authorization: Bearer $UPLOAD_SECRET" \
   -H "content-type: application/xml" \
   --data-binary "@$OUT_DIR/appcast.xml" >/dev/null
 
 printf 'Published WD-40 %s (build %s, %s bytes)\n' "$VERSION" "$BUILD" "$LENGTH"
-printf '  feed: %s/appcast.xml\n  zip:  %s/%s\n' "$RELAY" "$RELAY" "$ZIP"
+printf '  feed: %s/appcast.xml\n  zip:  %s/%s\n  dmg:  %s/%s\n' "$RELAY" "$RELAY" "$ZIP" "$RELAY" "$DMG"
