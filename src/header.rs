@@ -110,7 +110,9 @@ impl ScanHeader {
     /// One qualifier at a time: a settling total is a floor; a settled scan
     /// total is an upper bound until physical accounting is requested.
     fn reclaimable_qualifier(&self) -> &'static str {
-        if self.sizing() {
+        if self.discovering {
+            ""
+        } else if self.sizing() {
             "\u{2265} "
         } else if self.approximate {
             "up to "
@@ -141,7 +143,8 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     label_right(parent, &format!("of {}", scan_size(disk.total_bytes)), PAD_X + 200.0, y_top - 35.0, CONTENT_WIDTH - 200.0, 16.0, 11.5, theme.ink_3, true, mtm);
 
     let used = disk.total_bytes.saturating_sub(disk.free_bytes).min(disk.total_bytes);
-    draw_scan_gauge(parent, y_top - 59.0, disk, model, used, theme, mtm);
+    let reclaim_landed = crate::tasks::take_reclaim_landed();
+    draw_scan_gauge(parent, y_top - 59.0, disk, model, used, reclaim_landed, theme, mtm);
     if model.discovering {
         crate::motion::reset_scan_gauge();
     }
@@ -186,6 +189,7 @@ fn draw_scan_gauge(
     disk: DiskSpace,
     model: &ScanHeader,
     used: u64,
+    reclaim_landed: bool,
     theme: &Theme,
     mtm: MainThreadMarker,
 ) {
@@ -202,7 +206,9 @@ fn draw_scan_gauge(
     let used_w = w * parts.used;
     add_fill(parent, PAD_X, y, used_w, 11.0, theme.ink_4, 1.0, 0.0, mtm);
     let target_w = w * parts.artifacts;
-    let animation = crate::motion::scan_gauge_animation(target_w, model.sizing(), model.in_progress());
+    let animation = crate::motion::scan_gauge_animation(
+        target_w, model.sizing(), model.in_progress(), reclaim_landed,
+    );
     let artifact = add_fill(parent, PAD_X + used_w, y, animation.from, 11.0, theme.accent, 1.0, 0.0, mtm);
     crate::motion::glide_for_gauge(&artifact, PAD_X + used_w, y, animation.to, animation.duration);
     let marker = add_fill(parent, PAD_X + used_w + animation.from, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);
@@ -276,25 +282,26 @@ fn draw_gauge(
 mod tests {
     use super::ScanHeader;
 
-    fn model(measured: usize, total: usize, approximate: bool) -> ScanHeader {
+    fn model(measured: usize, total: usize, discovering: bool, approximate: bool) -> ScanHeader {
         ScanHeader {
             disk: None,
             reclaimable: 10,
             measured,
             total,
-            discovering: false,
+            discovering,
             approximate,
         }
     }
 
     #[test]
     fn sizing_uses_the_floor_qualifier_alone() {
-        assert_eq!(model(0, 1, true).reclaimable_qualifier(), "\u{2265} ");
+        assert_eq!(model(0, 1, false, true).reclaimable_qualifier(), "\u{2265} ");
+        assert_eq!(model(0, 0, true, true).reclaimable_qualifier(), "");
     }
 
     #[test]
     fn settled_allocated_total_uses_the_upper_bound_qualifier() {
-        assert_eq!(model(1, 1, true).reclaimable_qualifier(), "up to ");
-        assert_eq!(model(1, 1, false).reclaimable_qualifier(), "");
+        assert_eq!(model(1, 1, false, true).reclaimable_qualifier(), "up to ");
+        assert_eq!(model(1, 1, false, false).reclaimable_qualifier(), "");
     }
 }

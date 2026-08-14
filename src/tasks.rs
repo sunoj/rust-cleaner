@@ -41,6 +41,7 @@ static SCANNING: AtomicBool = AtomicBool::new(false);
 static DISCOVERING: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
 static RECLAIM_STARTED: AtomicBool = AtomicBool::new(false);
+static RECLAIM_LANDED: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
@@ -187,6 +188,7 @@ pub fn on_scan_done(mtm: MainThreadMarker) {
         state.reset_selection();
     });
     RECLAIM_STARTED.store(false, Ordering::Relaxed);
+    RECLAIM_LANDED.store(false, Ordering::Relaxed);
     popover::refresh(mtm);
     let pending: Vec<TargetDir> =
         with_state_ret(|state| state.targets.clone()).unwrap_or_default();
@@ -280,10 +282,15 @@ pub fn on_reclaim_done(mtm: MainThreadMarker) {
         state.reclaim = Some(found);
         println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
     });
+    RECLAIM_LANDED.store(true, Ordering::Relaxed);
     if !live::totals_changed(mtm) {
         popover::refresh(mtm);
     }
     popover::refresh_status(mtm);
+}
+
+pub(crate) fn take_reclaim_landed() -> bool {
+    RECLAIM_LANDED.swap(false, Ordering::Relaxed)
 }
 
 /// Clean exactly the checked items. Irreversible; nothing else is touched.
