@@ -192,7 +192,7 @@ fn draw_scan_gauge(
     let used_w = w * parts.used;
     add_fill(parent, PAD_X, y, used_w, 11.0, theme.ink_4, 1.0, 0.0, mtm);
     let target_w = w * parts.artifacts;
-    let animation = crate::motion::scan_gauge_animation(target_w, model.sizing());
+    let animation = crate::motion::scan_gauge_animation(target_w, model.sizing(), model.in_progress());
     let artifact = add_fill(parent, PAD_X + used_w, y, animation.from, 11.0, theme.accent, 1.0, 0.0, mtm);
     crate::motion::glide_for_gauge(&artifact, PAD_X + used_w, y, animation.to, animation.duration);
     let marker = add_fill(parent, PAD_X + used_w + animation.from, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);

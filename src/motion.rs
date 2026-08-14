@@ -86,9 +86,15 @@ pub fn glide_gauge_marker(view: &NSBox, x: f64, y: f64, duration: f64) {
 }
 
 /// Keep the gauge transition continuous when its header is rebuilt.
-pub fn scan_gauge_animation(target: f64, sizing: bool) -> GaugeAnimation {
+///
+/// A remembered transition only means anything while a scan is running. The
+/// popover is `Transient`, so dismissing it by clicking away never reaches
+/// `popover::close` and nothing forgets the width the last scan was part way
+/// to — a settled reopen would then glide up to a figure that has been final
+/// for minutes.
+pub fn scan_gauge_animation(target: f64, sizing: bool, in_progress: bool) -> GaugeAnimation {
     let target = target.max(0.0);
-    if reduce_motion() {
+    if reduce_motion() || !in_progress {
         SCAN_GAUGE.with(|cell| {
             *cell.borrow_mut() = Some(GaugeTransition { from: target, to: target, started: Instant::now() });
         });
@@ -188,11 +194,27 @@ mod tests {
     #[test]
     fn closing_scan_forgets_gauge_transition_before_settled_reopen() {
         reset_scan_gauge();
-        let _ = scan_gauge_animation(4.0, true);
-        let _ = scan_gauge_animation(8.0, true);
+        let _ = scan_gauge_animation(4.0, true, true);
+        let _ = scan_gauge_animation(8.0, true, true);
         crate::tasks::discovery_sweep_stopped();
 
-        let animation = scan_gauge_animation(16.0, false);
+        let animation = scan_gauge_animation(16.0, false, false);
+        assert_eq!(animation.from, 16.0);
+        assert_eq!(animation.to, 16.0);
+        assert_eq!(animation.duration, 0.0);
+    }
+
+    /// Clicking away dismisses a `Transient` popover without reaching
+    /// `popover::close`, so nothing clears the transition. A settled header
+    /// must draw its bar outright rather than glide to a figure that stopped
+    /// moving while the popover was shut.
+    #[test]
+    fn a_settled_reopen_draws_outright_even_though_nothing_was_forgotten() {
+        reset_scan_gauge();
+        let _ = scan_gauge_animation(4.0, true, true);
+        let _ = scan_gauge_animation(8.0, true, true);
+
+        let animation = scan_gauge_animation(16.0, false, false);
         assert_eq!(animation.from, 16.0);
         assert_eq!(animation.to, 16.0);
         assert_eq!(animation.duration, 0.0);
