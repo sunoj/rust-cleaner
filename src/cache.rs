@@ -123,7 +123,7 @@ pub fn forget(path: &Path) {
 /// The device-byte accounting, if it was made from exactly these paths, sizes,
 /// and newest descendant timestamps and is still within its TTL. The timestamp
 /// is activity evidence, not proof that physical extents stayed unchanged:
-/// it has one-second precision and a writer can restore it.
+/// filesystem timestamps can be coarse and a writer can restore them.
 pub fn attribution_for(fingerprint: &[(PathBuf, u64, u64)]) -> Option<Attribution> {
     let wanted = printable(fingerprint);
     let guard = STORE.lock().ok()?;

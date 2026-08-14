@@ -157,20 +157,11 @@ mod tests {
     use crate::scanner::{ArtifactKind, TargetDir};
     use std::collections::HashSet;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::time::SystemTime;
 
     fn target(path: PathBuf, size_bytes: u64) -> TargetDir {
         TargetDir { path, size_bytes, last_modified: SystemTime::UNIX_EPOCH, kind: ArtifactKind::RustTarget }
-    }
-
-    fn measured_target(path: PathBuf) -> TargetDir {
-        let measurement = crate::sizes::measure_dir_with_modified(&path);
-        TargetDir {
-            size_bytes: measurement.bytes,
-            last_modified: measurement.last_modified.unwrap_or(SystemTime::UNIX_EPOCH),
-            path,
-            kind: ArtifactKind::RustTarget,
-        }
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -265,16 +256,25 @@ mod tests {
             return;
         }
 
+        let measure = |path: PathBuf| {
+            let target = target(path, 0);
+            let result = Mutex::new(None);
+            crate::sizes::size_targets(std::slice::from_ref(&target), |sized| {
+                *result.lock().unwrap() = Some((sized.bytes, sized.last_modified));
+            });
+            let (size_bytes, last_modified) = result.into_inner().unwrap().expect("one target");
+            TargetDir { path: target.path, size_bytes, last_modified: last_modified.unwrap_or(SystemTime::UNIX_EPOCH), kind: target.kind }
+        };
         crate::cache::forget(&source);
         crate::cache::forget(&rewritten);
-        let before = vec![measured_target(source.clone()), measured_target(rewritten.clone())];
+        let before = vec![measure(source.clone()), measure(rewritten.clone())];
         let cached = Reclaim::measure(&before).expect("two targets");
         let four_mb = (4 << 20) as u64;
         assert!(cached.total_of(&before) < four_mb * 2, "baseline is not a clone");
 
         std::thread::sleep(std::time::Duration::from_millis(1100));
         let _ = std::fs::write(rewritten.join("payload.bin"), vec![b'y'; 4 << 20]);
-        let after = vec![measured_target(source), measured_target(rewritten)];
+        let after = vec![measure(source), measure(rewritten)];
         assert_eq!(after[0].size_bytes, before[0].size_bytes);
         assert_eq!(after[1].size_bytes, before[1].size_bytes);
         assert!(after[1].last_modified > before[1].last_modified);
@@ -293,7 +293,7 @@ fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64, u64)> {
                 .last_modified
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
-                .map_or(0, |since| since.as_secs());
+                .map_or(0, |since| since.as_nanos().min(u64::MAX as u128) as u64);
             (target.path.clone(), target.size_bytes, content_modified)
         })
         .collect()

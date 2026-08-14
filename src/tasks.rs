@@ -18,7 +18,7 @@ use crate::mainthread::{
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use wd40::disk::disk_space;
 use wd40::discover::scan_discover;
 use wd40::scanner::TargetDir;
@@ -50,7 +50,8 @@ static PENDING_DONE: Mutex<Option<DoneSummary>> = Mutex::new(None);
 static CLEAN_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
 static PROGRESS: Mutex<Option<CleanProgress>> = Mutex::new(None);
 /// Sizes that have settled but not yet reached the screen.
-static SIZES: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
+type SettledSize = (usize, u64, Option<SystemTime>);
+static SIZES: Mutex<Vec<SettledSize>> = Mutex::new(Vec::new());
 /// One pending hop to the main thread at a time, however fast sizes arrive.
 static SIZE_HOP: AtomicBool = AtomicBool::new(false);
 static PROGRESS_HOP: AtomicBool = AtomicBool::new(false);
@@ -176,7 +177,7 @@ pub fn on_scan_done(mtm: MainThreadMarker) {
     std::thread::spawn(move || {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             size_targets(&pending, |sized| {
-                SIZES.lock().unwrap().push((sized.index, sized.bytes));
+                SIZES.lock().unwrap().push(settled_size(sized));
                 if !SIZE_HOP.swap(true, Ordering::SeqCst) {
                     dispatch_to_main(sizes_tick_trampoline);
                 }
@@ -194,16 +195,20 @@ pub fn on_sizes_tick(mtm: MainThreadMarker) {
     if arrived.is_empty() {
         return;
     }
-    let indices: Vec<usize> = arrived.iter().map(|(index, _)| *index).collect();
+    let indices: Vec<usize> = arrived.iter().map(|(index, _, _)| *index).collect();
     with_state(|state| {
-        for (index, bytes) in arrived {
-            state.apply_size(index, bytes);
+        for (index, bytes, last_modified) in arrived {
+            state.apply_size(index, bytes, last_modified);
         }
     });
     if !live::sizes_arrived(&indices, mtm) {
         popover::refresh(mtm);
     }
     popover::refresh_status(mtm);
+}
+
+fn settled_size(sized: wd40::sizes::SizedTarget) -> SettledSize {
+    (sized.index, sized.bytes, sized.last_modified)
 }
 
 pub fn on_sizes_done(mtm: MainThreadMarker) {
@@ -401,4 +406,17 @@ pub fn start_auto_clean(hours: u64) {
 
 pub fn stop_auto_clean() {
     stop_timer(&AUTO_TIMER);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settled_size;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn sizing_handoff_keeps_descendant_timestamp() {
+        let last_modified = Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(7));
+        let queued = settled_size(wd40::sizes::SizedTarget { index: 3, bytes: 11, last_modified });
+        assert_eq!(queued, (3, 11, last_modified));
+    }
 }

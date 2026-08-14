@@ -21,7 +21,7 @@ struct KeptExtents {
     modified: u64,
     /// The newest descendant timestamp measured this scan. It is evidence that
     /// the target was active, not proof that its extents stayed unchanged:
-    /// timestamps have one-second precision and a writer can restore them.
+    /// filesystem timestamps can be coarse and a writer can restore them.
     content_modified: u64,
     /// The size measured this scan. A same-size deep write is why the content
     /// timestamp is checked alongside the aggregate size.
@@ -36,8 +36,8 @@ struct KeptExtents {
 /// evidence of activity than the root mtime plus size, but strictly weaker
 /// than a guarantee that the physical extents are unchanged.
 pub fn extents_of(path: &Path, bytes: u64, content_modified: SystemTime) -> Option<TargetExtents> {
-    let modified = seconds(std::fs::metadata(path).ok()?.modified().ok()?)?;
-    let content_modified = seconds(content_modified)?;
+    let modified = timestamp(std::fs::metadata(path).ok()?.modified().ok()?)?;
+    let content_modified = timestamp(content_modified)?;
     let guard = KEPT.lock().ok()?;
     let kept = guard.as_ref()?.get(&key(path))?;
     (kept.modified == modified && kept.content_modified == content_modified && kept.bytes == bytes)
@@ -45,11 +45,11 @@ pub fn extents_of(path: &Path, bytes: u64, content_modified: SystemTime) -> Opti
 }
 
 pub fn put_extents(path: &Path, bytes: u64, content_modified: SystemTime, value: TargetExtents) {
-    let Some(modified) = std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(seconds)
+    let Some(modified) = std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(timestamp)
     else {
         return;
     };
-    let Some(content_modified) = seconds(content_modified) else { return };
+    let Some(content_modified) = timestamp(content_modified) else { return };
     if let Ok(mut guard) = KEPT.lock() {
         guard
             .get_or_insert_with(HashMap::new)
@@ -72,8 +72,10 @@ fn key(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn seconds(at: SystemTime) -> Option<u64> {
-    at.duration_since(UNIX_EPOCH).ok().map(|since| since.as_secs())
+fn timestamp(at: SystemTime) -> Option<u64> {
+    at.duration_since(UNIX_EPOCH).ok().map(|since| {
+        since.as_nanos().min(u64::MAX as u128) as u64
+    })
 }
 
 #[cfg(test)]
@@ -102,6 +104,10 @@ mod tests {
         assert!(extents_of(&path, bytes, content_modified).is_none(), "nothing kept yet");
         put_extents(&path, bytes, content_modified, read_target(&path));
         assert!(extents_of(&path, bytes, content_modified).is_some(), "unchanged: answered");
+        assert!(
+            extents_of(&path, bytes, content_modified + Duration::from_nanos(1)).is_none(),
+            "newer activity: read again"
+        );
 
         // A different size is a different directory, whatever the clock says.
         assert!(extents_of(&path, bytes + 1, content_modified).is_none(), "resized: read again");
@@ -109,6 +115,22 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1100));
         let _ = std::fs::write(path.join("another.bin"), b"x");
         assert!(extents_of(&path, bytes, content_modified).is_none(), "touched: read again");
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn a_future_mtime_does_not_pin_later_content_activity() {
+        let path = scratch("future-mtime");
+        let file = path.join("payload.bin");
+        let _ = std::fs::write(&file, b"old");
+        let future = SystemTime::now() + Duration::from_secs(86_400);
+        std::fs::File::open(&file).expect("payload").set_modified(future).expect("mtime");
+        let before = crate::sizes::measure_dir_with_modified(&path).last_modified.expect("mtime");
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = std::fs::write(&file, b"new");
+        let after = crate::sizes::measure_dir_with_modified(&path).last_modified.expect("mtime");
+        assert!(after > before);
+        assert!(after <= SystemTime::now());
         let _ = std::fs::remove_dir_all(&path);
     }
 
