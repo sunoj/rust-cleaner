@@ -47,27 +47,16 @@ impl Reclaim {
             return Some(Self { owners, attribution: kept });
         }
         // Per target: an unchanged one is answered from level one, and only
-        // what a build actually touched is read again. On a machine where two
-        // of thirty targets move between scans, that is two reads instead of
-        // thirty.
-        let per_target: Vec<crate::extents::TargetExtents> = targets
-            .iter()
-            .map(|target| match crate::extent_cache::extents_of(&target.path, target.size_bytes) {
-                Some(kept) => kept,
-                None => {
-                    let read = crate::extents::read_target(&target.path);
-                    crate::extent_cache::put_extents(&target.path, target.size_bytes, read.clone());
-                    read
-                }
-            })
-            .collect();
+        // what a build actually touched is read again. Fresh reads are
+        // independent, so they share the sizing pool's cap and background QoS.
+        let per_target = read_targets(targets);
         let attribution = crate::extents::combine(&per_target);
         crate::cache::put_attribution(&fingerprint, attribution.clone());
         Some(Self { owners, attribution })
     }
 
     /// What the accounting depends on: which directories, and how big each is.
-    pub fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
+    pub fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64, u64)> {
         fingerprint(targets)
     }
 
@@ -109,6 +98,59 @@ impl Reclaim {
     }
 }
 
+fn read_targets(targets: &[TargetDir]) -> Vec<crate::extents::TargetExtents> {
+    let next = std::sync::Mutex::new(0_usize);
+    let finished = std::sync::Mutex::new(Vec::with_capacity(targets.len()));
+    let worker_count = crate::qos::workers().min(targets.len());
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| {
+                crate::qos::background();
+                loop {
+                    let index = {
+                        let mut next = next.lock().unwrap_or_else(|error| error.into_inner());
+                        if *next == targets.len() {
+                            None
+                        } else {
+                            let index = *next;
+                            *next += 1;
+                            Some(index)
+                        }
+                    };
+                    let Some(index) = index else { break };
+                    let target = &targets[index];
+                    let read = match crate::extent_cache::extents_of(
+                        &target.path,
+                        target.size_bytes,
+                        target.last_modified,
+                    ) {
+                        Some(kept) => kept,
+                        None => {
+                            let read = crate::extents::read_target(&target.path);
+                            crate::extent_cache::put_extents(
+                                &target.path,
+                                target.size_bytes,
+                                target.last_modified,
+                                read.clone(),
+                            );
+                            read
+                        }
+                    };
+                    finished
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push((index, read));
+                }
+            });
+        }
+    });
+
+    let mut finished = finished.into_inner().unwrap_or_default();
+    finished.sort_unstable_by_key(|(index, _)| *index);
+    finished.into_iter().map(|(_, target)| target).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::Reclaim;
@@ -119,6 +161,16 @@ mod tests {
 
     fn target(path: PathBuf, size_bytes: u64) -> TargetDir {
         TargetDir { path, size_bytes, last_modified: SystemTime::UNIX_EPOCH, kind: ArtifactKind::RustTarget }
+    }
+
+    fn measured_target(path: PathBuf) -> TargetDir {
+        let measurement = crate::sizes::measure_dir_with_modified(&path);
+        TargetDir {
+            size_bytes: measurement.bytes,
+            last_modified: measurement.last_modified.unwrap_or(SystemTime::UNIX_EPOCH),
+            path,
+            kind: ArtifactKind::RustTarget,
+        }
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -196,8 +248,53 @@ mod tests {
         assert!(found.bytes(&targets, &|_| true) >= four_mb);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn a_same_size_rewrite_invalidates_physical_cache_gates() {
+        let root = scratch("same-size-rewrite");
+        let source = root.join("source");
+        let rewritten = root.join("rewritten");
+        let _ = std::fs::create_dir_all(&source);
+        let _ = std::fs::create_dir_all(&rewritten);
+        let payload = source.join("payload.bin");
+        let _ = std::fs::write(&payload, vec![b'x'; 4 << 20]);
+        let cloned = std::process::Command::new("cp")
+            .arg("-c").arg(&payload).arg(rewritten.join("payload.bin")).status();
+        if !cloned.is_ok_and(|status| status.success()) {
+            eprintln!("skipped: cp -c unavailable");
+            return;
+        }
+
+        crate::cache::forget(&source);
+        crate::cache::forget(&rewritten);
+        let before = vec![measured_target(source.clone()), measured_target(rewritten.clone())];
+        let cached = Reclaim::measure(&before).expect("two targets");
+        let four_mb = (4 << 20) as u64;
+        assert!(cached.total_of(&before) < four_mb * 2, "baseline is not a clone");
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let _ = std::fs::write(rewritten.join("payload.bin"), vec![b'y'; 4 << 20]);
+        let after = vec![measured_target(source), measured_target(rewritten)];
+        assert_eq!(after[0].size_bytes, before[0].size_bytes);
+        assert_eq!(after[1].size_bytes, before[1].size_bytes);
+        assert!(after[1].last_modified > before[1].last_modified);
+
+        let fresh = Reclaim::measure(&after).expect("two targets");
+        assert!(fresh.total_of(&after) >= four_mb * 2, "rewrite stayed physically shared");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
-fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64)> {
-    targets.iter().map(|target| (target.path.clone(), target.size_bytes)).collect()
+fn fingerprint(targets: &[TargetDir]) -> Vec<(std::path::PathBuf, u64, u64)> {
+    targets
+        .iter()
+        .map(|target| {
+            let content_modified = target
+                .last_modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map_or(0, |since| since.as_secs());
+            (target.path.clone(), target.size_bytes, content_modified)
+        })
+        .collect()
 }

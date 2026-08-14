@@ -219,14 +219,17 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     crate::screenshot::maybe_start(mtm);
 }
 
-/// Work out what the targets really occupy on the device. One `open` per file
-/// over every target is 71 s on this Mac, so it runs after the sizes are on
-/// screen rather than before, at background priority, and the totals use summed
-/// sizes until it lands.
+/// Work out what the targets really occupy on the device. A fresh physical pass
+/// on this Mac's current target set measured 5.7 s before bounded target reads
+/// and 4.5 s after, across 74,608 files in 19 targets (warm filesystem cache,
+/// physical app caches invalidated). The older 71 s / four-hundred-thousand-file
+/// claim described a different workload or cache state, so this pass still runs
+/// after sizes reach the screen, at background priority, with summed sizes shown
+/// until it lands.
 ///
 /// It is also skipped outright when nothing has moved. An automatic rescan every
 /// ten minutes usually finds the same directories at the same sizes, and reading
-/// four hundred thousand files again to reach the same answer is the kind of
+/// tens of thousands of files again to reach the same answer is the kind of
 /// work a menu bar app has no business doing.
 fn start_reclaim() {
     let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
