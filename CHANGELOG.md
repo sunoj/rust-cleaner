@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.3] — 2026-08-14
+
+### Fixed
+- **The reclaimable figure could be stale, and was under-reporting by half** (`src/extent_cache.rs`, `src/reclaim.rs`, `src/cache.rs`): both physical caches decided a target's extents were unchanged from the target directory's *own* mtime and its total size. A deep write moves neither, so an in-place rewrite of a 64 MiB APFS clone left the cached union at 64 MiB while the disk held 128 MiB. They now also carry the newest timestamp *below* the target, which the sizing pass already computes — evidence that something happened, not proof that the extents held still, and the comments say so. Timestamps in the future are clamped, and the comparison keeps nanoseconds rather than whole seconds.
+- **The scanning indicator sat on top of the text it was meant to sit beside** (`src/header.rs`): it was placed a whole `PAD_X` short of the right edge, over "N of M measured".
+
+### Changed
+- **The capacity gauge carries the scan** (`src/header.rs`, `src/motion.rs`): the reclaimable segment glides as measurements land instead of jumping, and while discovering — when there is no figure to show at all — a pale sweep travels the empty track. The spinner is gone. Under Reduce Motion there is neither, only the words.
+- **Physical measurement runs on the worker pool the logical pass already uses** (`src/reclaim.rs`): 5.7 s to 4.5 s over 19 targets and 74,608 files. The comment claiming 71 seconds was measured against something else and is corrected.
+
 ## [0.6.2] — 2026-08-14
 
 ### Fixed
