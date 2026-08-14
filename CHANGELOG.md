@@ -1,6 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.1] — 2026-08-14
+
+### Added
+- **The rest of what Xcode leaves behind** (`src/roots.rs`, `src/cache_names.rs`): the SwiftPM package cache (`~/Library/Caches/org.swift.swiftpm`, 187 MB on the machine this was written on), `~/Library/Caches/com.apple.dt.Xcode`, and every `~/Library/Developer/Xcode/* DeviceSupport` — iOS, watchOS, tvOS and any sibling, found by enumeration rather than a hardcoded platform. DerivedData, ModuleCache and the per-simulator caches were already covered; these were not.
+- **SwiftPM and Xcode project outputs** (`src/discover.rs`): `.build/` beside a `Package.swift`, and `build/` beside a `*.xcodeproj`. An `.xcodeproj` is a directory with a project-specific name, so it is matched by extension rather than looked up under a fixed one.
+
+  A `dist/` beside either is deliberately **not** an artifact, and neither is a `build/` beside a `Package.swift`: SwiftPM writes to `.build/` and nothing else, and no Xcode tool writes to `dist/`. Whatever is in those directories was put there by hand. Archives are still never offered — an `.xcarchive` holds the only `.dSYM`s that make a shipped build's crash logs symbolicable, and it does not come back. Simulator devices are still never deleted: that is `xcrun simctl`, not `rm`.
+
+### Changed
+- **Releases are notarized** (`scripts/release.sh`, `scripts/verify-release.sh`): signing is no longer opt-in, the disk image carries its own signature and its own stapled ticket, and nothing is uploaded until the artifacts themselves — the app extracted from the zip, and the app inside the mounted image — pass a signature, ticket and Gatekeeper check. 0.6.0 went out ad-hoc signed because that check did not exist.
+- **`artifact_types` is gone from `config.toml`**: a custom name in it was never collected, and its only working half — removing a built-in name — is what the per-group scan switches already do. Config files that still carry the key load unchanged.
+
+## [0.6.0] — 2026-08-14
 
 ### Added
 - **Rust toolchains** (`src/toolchains.rs`): a fifth scan group for `~/.rustup/toolchains`, which no scan root reached before — it lives under a dot-directory the walk refuses to enter, and its directory names match no artifact pattern. Six unused toolchains were sitting in 5.1 GB on the machine this was written on.
