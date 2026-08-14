@@ -89,6 +89,7 @@ pub fn header_model(state: &AppState) -> ScanHeader {
         reclaimable: state.total_size(),
         measured: state.measured.len(),
         total: state.targets.len(),
+        discovering: crate::tasks::is_discovering(),
     }
 }
 
@@ -132,7 +133,7 @@ fn draw_list(
         }
         y = draw_show_more(root, state, plan, y, list_bottom, theme, target, mtm);
     }
-    if plans.is_empty() && !state.sizing() {
+    if plans.is_empty() && !state.sizing() && !crate::tasks::is_scanning() {
         label(
             root, "Nothing to clean \u{2014} everything is tidy", PAD_X, list_bottom + 20.0,
             CONTENT_WIDTH, 20.0, 13.0, false, theme.ink_2, false, mtm,
@@ -236,7 +237,7 @@ pub fn draw_footer(
 }
 
 fn clean_cta(state: &AppState) -> CleanCta {
-    if state.sizing() {
+    if state.sizing() || crate::tasks::is_scanning() {
         return CleanCta::Measuring;
     }
     if state.selected.is_empty() {
