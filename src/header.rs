@@ -95,6 +95,7 @@ pub struct ScanHeader {
     pub measured: usize,
     pub total: usize,
     pub discovering: bool,
+    pub approximate: bool,
 }
 
 impl ScanHeader {
@@ -106,10 +107,13 @@ impl ScanHeader {
         self.discovering || self.sizing()
     }
 
-    /// Marks a total that is still being added to.
-    fn floor(&self) -> &'static str {
+    /// One qualifier at a time: a settling total is a floor; a settled scan
+    /// total is an upper bound until physical accounting is requested.
+    fn reclaimable_qualifier(&self) -> &'static str {
         if self.sizing() {
             "\u{2265} "
+        } else if self.approximate {
+            "up to "
         } else {
             ""
         }
@@ -146,7 +150,7 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
         parent,
         y_top - 86.0,
         [
-            ("Reclaimable", format!("{}{}", model.floor(), human_size(reclaimable)), theme.accent),
+            ("Reclaimable", format!("{}{}", model.reclaimable_qualifier(), human_size(reclaimable)), theme.accent),
             ("In use", human_size(used.saturating_sub(reclaimable)), theme.ink_4),
             ("Free", human_size(disk.free_bytes), theme.pos),
         ],
@@ -155,7 +159,13 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     );
 
     let after = disk.free_bytes.saturating_add(reclaimable).min(disk.total_bytes);
-    let bound = if model.sizing() { "at least " } else { "" };
+    let bound = if model.sizing() {
+        "at least "
+    } else if model.approximate {
+        "up to "
+    } else {
+        ""
+    };
     let detail = if model.discovering {
         "Finding build artifacts\u{2026}".to_string()
     } else if model.sizing() {
@@ -261,4 +271,30 @@ fn draw_gauge(
     let art_w = w * parts.artifacts;
     add_fill(parent, PAD_X, y, used_w, 7.0, theme.ink_4, 1.0, 3.5, mtm);
     add_fill(parent, PAD_X + used_w, y, art_w.max(0.0), 7.0, theme.accent, 1.0, 3.5, mtm);
+}
+#[cfg(test)]
+mod tests {
+    use super::ScanHeader;
+
+    fn model(measured: usize, total: usize, approximate: bool) -> ScanHeader {
+        ScanHeader {
+            disk: None,
+            reclaimable: 10,
+            measured,
+            total,
+            discovering: false,
+            approximate,
+        }
+    }
+
+    #[test]
+    fn sizing_uses_the_floor_qualifier_alone() {
+        assert_eq!(model(0, 1, true).reclaimable_qualifier(), "\u{2265} ");
+    }
+
+    #[test]
+    fn settled_allocated_total_uses_the_upper_bound_qualifier() {
+        assert_eq!(model(1, 1, true).reclaimable_qualifier(), "up to ");
+        assert_eq!(model(1, 1, false).reclaimable_qualifier(), "");
+    }
 }
