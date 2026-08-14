@@ -128,7 +128,6 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
                 "Measuring build artifacts\u{2026}"
             };
             label(parent, detail, PAD_X, y_top - 72.0, 230.0, 16.0, 11.5, false, theme.ink_3, true, mtm);
-            crate::motion::scan_indicator(parent, CONTENT_WIDTH - 16.0, y_top - 76.0, mtm);
         }
         return;
     };
@@ -138,8 +137,11 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     label_right(parent, &format!("of {}", scan_size(disk.total_bytes)), PAD_X + 200.0, y_top - 35.0, CONTENT_WIDTH - 200.0, 16.0, 11.5, theme.ink_3, true, mtm);
 
     let used = disk.total_bytes.saturating_sub(disk.free_bytes).min(disk.total_bytes);
-    let reclaimable = model.reclaimable.min(used);
-    draw_scan_gauge(parent, y_top - 59.0, disk, reclaimable, theme, mtm);
+    draw_scan_gauge(parent, y_top - 59.0, disk, model, used, theme, mtm);
+    if model.discovering {
+        crate::motion::reset_scan_gauge();
+    }
+    let reclaimable = if model.discovering { 0 } else { model.reclaimable.min(used) };
     draw_legend_row(
         parent,
         y_top - 86.0,
@@ -166,27 +168,35 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
         let counted = format!("{} of {} measured", model.measured, model.total);
         label_right(parent, &counted, PAD_X + 230.0, y_top - 112.0, CONTENT_WIDTH - 230.0, 16.0, 11.5, theme.ink_3, true, mtm);
     }
-    if model.in_progress() {
-        crate::motion::scan_indicator(parent, CONTENT_WIDTH - 16.0, y_top - 116.0, mtm);
-    }
 }
 
 fn draw_scan_gauge(
     parent: &NSView,
     y: f64,
     disk: DiskSpace,
-    reclaimable: u64,
+    model: &ScanHeader,
+    used: u64,
     theme: &Theme,
     mtm: MainThreadMarker,
 ) {
-    let parts = gauge_fractions(disk, reclaimable);
     let w = CONTENT_WIDTH;
     add_fill(parent, PAD_X, y, w, 11.0, theme.pos, 0.26, 3.0, mtm);
+    if model.discovering {
+        let sweep = add_fill(parent, 0.0, y, 38.0, 11.0, theme.surface, 0.65, 3.0, mtm);
+        crate::motion::install_discovery_sweep(sweep, PAD_X, w);
+        return;
+    }
+
+    let reclaimable = model.reclaimable.min(used);
+    let parts = gauge_fractions(disk, reclaimable);
     let used_w = w * parts.used;
-    let art_w = w * parts.artifacts;
     add_fill(parent, PAD_X, y, used_w, 11.0, theme.ink_4, 1.0, 0.0, mtm);
-    add_fill(parent, PAD_X + used_w, y, art_w, 11.0, theme.accent, 1.0, 0.0, mtm);
-    add_fill(parent, PAD_X + used_w + art_w, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);
+    let target_w = w * parts.artifacts;
+    let animation = crate::motion::scan_gauge_animation(target_w, model.sizing(), model.in_progress());
+    let artifact = add_fill(parent, PAD_X + used_w, y, animation.from, 11.0, theme.accent, 1.0, 0.0, mtm);
+    crate::motion::glide_for_gauge(&artifact, PAD_X + used_w, y, animation.to, animation.duration);
+    let marker = add_fill(parent, PAD_X + used_w + animation.from, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);
+    crate::motion::glide_gauge_marker(&marker, PAD_X + used_w + animation.to, y, animation.duration);
 }
 
 /// Lay the three legend items out at their natural widths and spread the slack
