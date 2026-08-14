@@ -92,9 +92,14 @@ pub fn glide_gauge_marker(view: &NSBox, x: f64, y: f64, duration: f64) {
 /// `popover::close` and nothing forgets the width the last scan was part way
 /// to — a settled reopen would then glide up to a figure that has been final
 /// for minutes.
-pub fn scan_gauge_animation(target: f64, sizing: bool, in_progress: bool) -> GaugeAnimation {
+pub fn scan_gauge_animation(
+    target: f64,
+    sizing: bool,
+    in_progress: bool,
+    reclaim_landed: bool,
+) -> GaugeAnimation {
     let target = target.max(0.0);
-    if reduce_motion() || !in_progress {
+    if reduce_motion() || (!in_progress && !reclaim_landed) {
         SCAN_GAUGE.with(|cell| {
             *cell.borrow_mut() = Some(GaugeTransition { from: target, to: target, started: Instant::now() });
         });
@@ -109,6 +114,10 @@ pub fn scan_gauge_animation(target: f64, sizing: bool, in_progress: bool) -> Gau
             return GaugeAnimation { from: target, to: target, duration: 0.0 };
         };
         let current = gauge_width(previous, now);
+        if reclaim_landed {
+            *previous = GaugeTransition { from: current, to: target, started: now };
+            return GaugeAnimation { from: current, to: target, duration: GLIDE };
+        }
         let target = if sizing { target.max(previous.to).max(current) } else { target };
         if target < current {
             *previous = GaugeTransition { from: target, to: target, started: now };
@@ -194,11 +203,11 @@ mod tests {
     #[test]
     fn closing_scan_forgets_gauge_transition_before_settled_reopen() {
         reset_scan_gauge();
-        let _ = scan_gauge_animation(4.0, true, true);
-        let _ = scan_gauge_animation(8.0, true, true);
+        let _ = scan_gauge_animation(4.0, true, true, false);
+        let _ = scan_gauge_animation(8.0, true, true, false);
         crate::tasks::discovery_sweep_stopped();
 
-        let animation = scan_gauge_animation(16.0, false, false);
+        let animation = scan_gauge_animation(16.0, false, false, false);
         assert_eq!(animation.from, 16.0);
         assert_eq!(animation.to, 16.0);
         assert_eq!(animation.duration, 0.0);
@@ -211,12 +220,28 @@ mod tests {
     #[test]
     fn a_settled_reopen_draws_outright_even_though_nothing_was_forgotten() {
         reset_scan_gauge();
-        let _ = scan_gauge_animation(4.0, true, true);
-        let _ = scan_gauge_animation(8.0, true, true);
+        let _ = scan_gauge_animation(4.0, true, true, false);
+        let _ = scan_gauge_animation(8.0, true, true, false);
 
-        let animation = scan_gauge_animation(16.0, false, false);
+        let animation = scan_gauge_animation(16.0, false, false, false);
         assert_eq!(animation.from, 16.0);
         assert_eq!(animation.to, 16.0);
         assert_eq!(animation.duration, 0.0);
+    }
+
+    #[test]
+    fn reclaim_landing_glides_once_but_settled_redraw_still_snaps() {
+        reset_scan_gauge();
+        let _ = scan_gauge_animation(16.0, false, false, false);
+
+        let landing = scan_gauge_animation(6.0, false, false, true);
+        assert_eq!(landing.from, 16.0);
+        assert_eq!(landing.to, 6.0);
+        assert!(landing.duration > 0.0);
+
+        let settled = scan_gauge_animation(4.0, false, false, false);
+        assert_eq!(settled.from, 4.0);
+        assert_eq!(settled.to, 4.0);
+        assert_eq!(settled.duration, 0.0);
     }
 }

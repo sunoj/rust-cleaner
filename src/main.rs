@@ -50,7 +50,7 @@ mod treemap;
 mod updater;
 mod widgets;
 
-use state::{with_state, AppState, UiScreen};
+use state::{with_state, with_state_ret, AppState, UiScreen};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, MainThreadOnly};
@@ -87,10 +87,13 @@ define_class!(
         fn handle_toggle_group(&self, sender: &NSButton) {
             let index = (sender.tag() - scan_view::TAG_GROUP_BASE) as usize;
             let Some(&group) = wd40::scanner::ArtifactGroup::ALL.get(index) else { return };
-            with_state(|state| {
+            let intent = with_state_ret(|state| {
+                let was_empty = state.selected.is_empty();
                 let empty = state.empty_targets();
                 selection::toggle_group(&state.targets, &mut state.selected, group, &empty);
-            });
+                (was_empty, state.selected.is_empty())
+            }).unwrap_or((false, true));
+            tasks::reclaim_for_selection_intent(intent.0, intent.1);
             if !live::selection_changed(self.mtm()) {
                 popover::refresh(self.mtm());
             }

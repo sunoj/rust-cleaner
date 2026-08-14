@@ -14,7 +14,12 @@ pub fn toggle_item(tag: isize, mtm: MainThreadMarker) {
     let index = (tag - crate::scan_view::TAG_ITEM_BASE) as usize;
     // Ticking a row is the smallest state change the app has; it repaints the
     // box and the button, and leaves the list exactly where it was.
-    with_state(|state| state.toggle_selected(index));
+    let intent = with_state_ret(|state| {
+        let was_empty = state.selected.is_empty();
+        state.toggle_selected(index);
+        (was_empty, state.selected.is_empty())
+    }).unwrap_or((false, true));
+    tasks::reclaim_for_selection_intent(intent.0, intent.1);
     if !crate::live::selection_changed(mtm) {
         popover::refresh(mtm);
     }

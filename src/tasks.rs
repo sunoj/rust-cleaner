@@ -40,6 +40,8 @@ static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
 static DISCOVERING: AtomicBool = AtomicBool::new(false);
 static STOP_AFTER: AtomicBool = AtomicBool::new(false);
+static RECLAIM_STARTED: AtomicBool = AtomicBool::new(false);
+static RECLAIM_LANDED: AtomicBool = AtomicBool::new(false);
 static SCAN_RESULT: Mutex<Option<Vec<TargetDir>>> = Mutex::new(None);
 static RECLAIM_RESULT: Mutex<Option<wd40::reclaim::Reclaim>> = Mutex::new(None);
 static DONE_RESULT: Mutex<Option<DoneSummary>> = Mutex::new(None);
@@ -182,8 +184,11 @@ pub fn on_scan_done(mtm: MainThreadMarker) {
     with_state(|state| {
         state.targets = targets;
         state.measured.clear();
+        state.reclaim = None;
         state.reset_selection();
     });
+    RECLAIM_STARTED.store(false, Ordering::Relaxed);
+    RECLAIM_LANDED.store(false, Ordering::Relaxed);
     popover::refresh(mtm);
     let pending: Vec<TargetDir> =
         with_state_ret(|state| state.targets.clone()).unwrap_or_default();
@@ -231,24 +236,27 @@ pub fn on_sizes_done(mtm: MainThreadMarker) {
     // point at which rows are allowed to move.
     with_state(|state| state.finish_sizing());
     popover::refresh(mtm);
-    start_reclaim();
     #[cfg(debug_assertions)]
     crate::screenshot::maybe_start(mtm);
 }
 
-/// Work out what the targets really occupy on the device. A fresh physical pass
-/// on this Mac's current target set measured 5.7 s before bounded target reads
-/// and 4.5 s after, across 74,608 files in 19 targets (warm filesystem cache,
-/// physical app caches invalidated). The older 71 s / four-hundred-thousand-file
-/// claim described a different workload or cache state, so this pass still runs
-/// after sizes reach the screen, at background priority, with summed sizes shown
-/// until it lands.
-///
-/// It is also skipped outright when nothing has moved. An automatic rescan every
-/// ten minutes usually finds the same directories at the same sizes, and reading
-/// tens of thousands of files again to reach the same answer is the kind of
-/// work a menu bar app has no business doing.
+/// Start the physical accounting pass after the first selection intent. It is
+/// deliberately not part of scan completion: the allocated total is enough
+/// for the scan, and cleaning can start before this background work finishes.
+pub(crate) fn reclaim_for_selection_intent(was_empty: bool, is_empty: bool) {
+    if should_start_reclaim(was_empty, is_empty) {
+        start_reclaim();
+    }
+}
+
+fn should_start_reclaim(was_empty: bool, is_empty: bool) -> bool {
+    was_empty && !is_empty
+}
+
 fn start_reclaim() {
+    if RECLAIM_STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let targets = with_state_ret(|state| state.targets.clone()).unwrap_or_default();
     if targets.is_empty() {
         return;
@@ -274,10 +282,15 @@ pub fn on_reclaim_done(mtm: MainThreadMarker) {
         state.reclaim = Some(found);
         println!("Reclaimable {} on the device, {summed} summed", wd40::scanner::human_size(state.total_size()));
     });
+    RECLAIM_LANDED.store(true, Ordering::Relaxed);
     if !live::totals_changed(mtm) {
         popover::refresh(mtm);
     }
     popover::refresh_status(mtm);
+}
+
+pub(crate) fn take_reclaim_landed() -> bool {
+    RECLAIM_LANDED.swap(false, Ordering::Relaxed)
 }
 
 /// Clean exactly the checked items. Irreversible; nothing else is touched.
@@ -437,5 +450,15 @@ mod tests {
     fn discovery_sweep_belongs_to_scan_screen() {
         assert!(super::scan_screen_is_visible(UiScreen::Scan));
         assert!(!super::scan_screen_is_visible(UiScreen::Settings));
+    }
+
+    #[test]
+    fn automatic_rescan_does_not_start_a_physical_pass() {
+        assert!(!super::should_start_reclaim(false, false));
+    }
+
+    #[test]
+    fn first_selection_intent_starts_a_physical_pass() {
+        assert!(super::should_start_reclaim(true, false));
     }
 }

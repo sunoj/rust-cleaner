@@ -95,6 +95,7 @@ pub struct ScanHeader {
     pub measured: usize,
     pub total: usize,
     pub discovering: bool,
+    pub approximate: bool,
 }
 
 impl ScanHeader {
@@ -106,10 +107,15 @@ impl ScanHeader {
         self.discovering || self.sizing()
     }
 
-    /// Marks a total that is still being added to.
-    fn floor(&self) -> &'static str {
-        if self.sizing() {
+    /// One qualifier at a time: a settling total is a floor; a settled scan
+    /// total is an upper bound until physical accounting is requested.
+    fn reclaimable_qualifier(&self) -> &'static str {
+        if self.discovering {
+            ""
+        } else if self.sizing() {
             "\u{2265} "
+        } else if self.approximate {
+            "up to "
         } else {
             ""
         }
@@ -137,7 +143,8 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     label_right(parent, &format!("of {}", scan_size(disk.total_bytes)), PAD_X + 200.0, y_top - 35.0, CONTENT_WIDTH - 200.0, 16.0, 11.5, theme.ink_3, true, mtm);
 
     let used = disk.total_bytes.saturating_sub(disk.free_bytes).min(disk.total_bytes);
-    draw_scan_gauge(parent, y_top - 59.0, disk, model, used, theme, mtm);
+    let reclaim_landed = crate::tasks::take_reclaim_landed();
+    draw_scan_gauge(parent, y_top - 59.0, disk, model, used, reclaim_landed, theme, mtm);
     if model.discovering {
         crate::motion::reset_scan_gauge();
     }
@@ -146,7 +153,7 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
         parent,
         y_top - 86.0,
         [
-            ("Reclaimable", format!("{}{}", model.floor(), human_size(reclaimable)), theme.accent),
+            ("Reclaimable", human_size(reclaimable), theme.accent),
             ("In use", human_size(used.saturating_sub(reclaimable)), theme.ink_4),
             ("Free", human_size(disk.free_bytes), theme.pos),
         ],
@@ -155,7 +162,13 @@ pub fn draw_scan_header(parent: &NSView, y_top: f64, model: &ScanHeader, theme: 
     );
 
     let after = disk.free_bytes.saturating_add(reclaimable).min(disk.total_bytes);
-    let bound = if model.sizing() { "at least " } else { "" };
+    let bound = if model.sizing() {
+        "at least "
+    } else if model.approximate {
+        "up to "
+    } else {
+        ""
+    };
     let detail = if model.discovering {
         "Finding build artifacts\u{2026}".to_string()
     } else if model.sizing() {
@@ -176,6 +189,7 @@ fn draw_scan_gauge(
     disk: DiskSpace,
     model: &ScanHeader,
     used: u64,
+    reclaim_landed: bool,
     theme: &Theme,
     mtm: MainThreadMarker,
 ) {
@@ -192,7 +206,9 @@ fn draw_scan_gauge(
     let used_w = w * parts.used;
     add_fill(parent, PAD_X, y, used_w, 11.0, theme.ink_4, 1.0, 0.0, mtm);
     let target_w = w * parts.artifacts;
-    let animation = crate::motion::scan_gauge_animation(target_w, model.sizing(), model.in_progress());
+    let animation = crate::motion::scan_gauge_animation(
+        target_w, model.sizing(), model.in_progress(), reclaim_landed,
+    );
     let artifact = add_fill(parent, PAD_X + used_w, y, animation.from, 11.0, theme.accent, 1.0, 0.0, mtm);
     crate::motion::glide_for_gauge(&artifact, PAD_X + used_w, y, animation.to, animation.duration);
     let marker = add_fill(parent, PAD_X + used_w + animation.from, y, 1.0, 11.0, theme.pos, 0.55, 0.0, mtm);
@@ -200,8 +216,38 @@ fn draw_scan_gauge(
 }
 
 /// Lay the three legend items out at their natural widths and spread the slack
-/// between them, as the mock's space-between does. Fixed columns clipped
-/// "Reclaimable" into the figure beside it.
+/// between them, as the mock's space-between does. The upper-bound qualifier
+/// stays in the detail line below so this tight row keeps all three values.
+#[derive(Clone, Copy)]
+struct LegendItemLayout {
+    title_x: f64,
+    title_width: f64,
+    value_x: f64,
+    value_width: f64,
+}
+
+fn legend_layout(widths: [(f64, f64); 3]) -> [LegendItemLayout; 3] {
+    const SWATCH: f64 = 8.0;
+    const AFTER_SWATCH: f64 = 6.0;
+    const BEFORE_VALUE: f64 = 6.0;
+    const DISPLAY_EXTRA: f64 = 2.0;
+    let natural: f64 = widths
+        .iter()
+        .map(|(title, value)| {
+            SWATCH + AFTER_SWATCH + title + DISPLAY_EXTRA + BEFORE_VALUE + value + DISPLAY_EXTRA
+        })
+        .sum();
+    let gap = ((CONTENT_WIDTH - natural) / 2.0).max(8.0);
+    let mut x = PAD_X;
+    std::array::from_fn(|index| {
+        let (title_width, value_width) = widths[index];
+        let title_x = x + SWATCH + AFTER_SWATCH;
+        let value_x = title_x + title_width + DISPLAY_EXTRA + BEFORE_VALUE;
+        x = value_x + value_width + DISPLAY_EXTRA + gap;
+        LegendItemLayout { title_x, title_width, value_x, value_width }
+    })
+}
+
 fn draw_legend_row(
     parent: &NSView,
     y: f64,
@@ -211,30 +257,17 @@ fn draw_legend_row(
 ) {
     const SWATCH: f64 = 8.0;
     const AFTER_SWATCH: f64 = 6.0;
-    const BEFORE_VALUE: f64 = 6.0;
-    let widths: Vec<(f64, f64)> = items
-        .iter()
-        .map(|(title, value, _)| {
-            (
-                widgets::fitted_width(title, 12.5, false, mtm),
-                widgets::fitted_width(value, 12.0, true, mtm),
-            )
-        })
-        .collect();
-    let natural: f64 = widths
-        .iter()
-        .map(|(t, v)| SWATCH + AFTER_SWATCH + t + BEFORE_VALUE + v)
-        .sum();
-    let gap = ((CONTENT_WIDTH - natural) / 2.0).max(8.0);
-
-    let mut x = PAD_X;
-    for ((title, value, swatch), (title_w, value_w)) in items.iter().zip(widths) {
-        add_fill(parent, x, y + 4.0, SWATCH, SWATCH, *swatch, 1.0, 2.0, mtm);
-        let title_x = x + SWATCH + AFTER_SWATCH;
-        label(parent, title, title_x, y, title_w + 2.0, 17.0, 12.5, false, theme.ink, false, mtm);
-        let value_x = title_x + title_w + BEFORE_VALUE;
-        label(parent, value, value_x, y, value_w + 2.0, 17.0, 12.0, false, theme.ink_2, true, mtm);
-        x = value_x + value_w + gap;
+    let widths = std::array::from_fn(|index| {
+        let (title, value, _) = &items[index];
+        (
+            widgets::fitted_width(title, 12.5, false, mtm),
+            widgets::fitted_width(&value, 12.0, true, mtm),
+        )
+    });
+    for ((title, value, swatch), layout) in items.iter().zip(legend_layout(widths)) {
+        add_fill(parent, layout.title_x - AFTER_SWATCH - SWATCH, y + 4.0, SWATCH, SWATCH, *swatch, 1.0, 2.0, mtm);
+        label(parent, title, layout.title_x, y, layout.title_width + 2.0, 17.0, 12.5, false, theme.ink, false, mtm);
+        label(parent, value, layout.value_x, y, layout.value_width + 2.0, 17.0, 12.0, false, theme.ink_2, true, mtm);
     }
 }
 
@@ -261,4 +294,47 @@ fn draw_gauge(
     let art_w = w * parts.artifacts;
     add_fill(parent, PAD_X, y, used_w, 7.0, theme.ink_4, 1.0, 3.5, mtm);
     add_fill(parent, PAD_X + used_w, y, art_w.max(0.0), 7.0, theme.accent, 1.0, 3.5, mtm);
+}
+#[cfg(test)]
+mod tests {
+    use super::{legend_layout, ScanHeader};
+    use crate::widgets::{CONTENT_WIDTH, PAD_X};
+
+    fn model(measured: usize, total: usize, discovering: bool, approximate: bool) -> ScanHeader {
+        ScanHeader {
+            disk: None,
+            reclaimable: 10,
+            measured,
+            total,
+            discovering,
+            approximate,
+        }
+    }
+
+    #[test]
+    fn sizing_uses_the_floor_qualifier_alone() {
+        assert_eq!(model(0, 1, false, true).reclaimable_qualifier(), "\u{2265} ");
+        assert_eq!(model(0, 0, true, true).reclaimable_qualifier(), "");
+    }
+
+    #[test]
+    fn settled_allocated_total_uses_the_upper_bound_qualifier() {
+        assert_eq!(model(1, 1, false, true).reclaimable_qualifier(), "up to ");
+        assert_eq!(model(1, 1, false, false).reclaimable_qualifier(), "");
+    }
+
+    #[test]
+    fn widest_legend_values_fit_without_overlap_or_clipping() {
+        // Worst realistic settled values: three 999.9G figures at the row's
+        // measured title/value widths. The qualifier is intentionally below.
+        let items = legend_layout([(65.0, 43.0), (38.0, 43.0), (25.0, 43.0)]);
+        let right_edge = PAD_X + CONTENT_WIDTH;
+        for item in items {
+            assert!(item.title_x + item.title_width + 2.0 + 6.0 <= item.value_x);
+            assert!(item.value_x + item.value_width + 2.0 <= right_edge);
+        }
+        for pair in items.windows(2) {
+            assert!(pair[0].value_x + pair[0].value_width + 2.0 <= pair[1].title_x);
+        }
+    }
 }

@@ -90,6 +90,7 @@ pub fn header_model(state: &AppState) -> ScanHeader {
         measured: state.measured.len(),
         total: state.targets.len(),
         discovering: crate::tasks::is_discovering(),
+        approximate: !state.reclaim.as_ref().is_some_and(|found| found.covers(&state.targets)),
     }
 }
 
