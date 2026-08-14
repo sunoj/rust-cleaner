@@ -59,9 +59,13 @@ printf 'Signing as %s\n' "$SIGN_IDENTITY"
 
 # Apple reads a zip of the app; the ticket goes onto the app itself, so both the
 # Sparkle zip and the disk image below are cut from an already-stapled copy.
+# A submission Apple never finishes would otherwise hold the release open for as
+# long as the terminal stays awake, so the wait is bounded. The service keeps
+# processing after the timeout; only our waiting stops.
 notarize() {
   local submit="$1" staple="$2"
-  if ! xcrun notarytool submit "$submit" --keychain-profile "$NOTARY_PROFILE" --wait; then
+  if ! xcrun notarytool submit "$submit" \
+    --keychain-profile "$NOTARY_PROFILE" --wait --timeout 30m; then
     printf 'ERROR: notarization failed for %s.\n' "$submit" >&2
     printf 'If the profile is missing, store it once:\n' >&2
     printf '  xcrun notarytool store-credentials %s \\\n' "$NOTARY_PROFILE" >&2
@@ -103,6 +107,21 @@ notarize "$OUT_DIR/$DMG" "$OUT_DIR/$DMG"
 
 SIG_LINE="$("$SIGN_UPDATE" "$OUT_DIR/$ZIP")"
 LENGTH="$(printf '%s' "$SIG_LINE" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
+
+# An enclosure without a signature, or with a length that describes some other
+# file, is well-formed XML that every installed copy will refuse to update from.
+# xmllint below cannot see either, so they are checked here.
+SIGNATURE="$(printf '%s' "$SIG_LINE" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')"
+if [[ -z "$SIGNATURE" ]]; then
+  printf 'ERROR: sign_update produced no signature; nothing uploaded\n' >&2
+  exit 1
+fi
+ZIP_BYTES="$(/usr/bin/stat -f%z "$OUT_DIR/$ZIP")"
+if [[ "$LENGTH" != "$ZIP_BYTES" ]]; then
+  printf 'ERROR: appcast says %s bytes, the zip is %s; nothing uploaded\n' \
+    "${LENGTH:-<none>}" "$ZIP_BYTES" >&2
+  exit 1
+fi
 
 # A "]]>" inside the notes would close the CDATA section early and let the rest
 # of the text be parsed as markup. Split the terminator across two sections.

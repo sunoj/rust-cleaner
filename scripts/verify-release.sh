@@ -12,8 +12,10 @@ WORK="$(mktemp -d)"
 MOUNT="$WORK/mnt"
 FAILURES=0
 
+# Unconditional and forgiving: an attach that failed still leaves the mountpoint
+# behind, and a detach that fails must not stop the work directory being removed.
 cleanup() {
-  [ -d "$MOUNT" ] && /usr/bin/hdiutil detach "$MOUNT" -quiet 2>/dev/null
+  /usr/bin/hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -55,10 +57,21 @@ check_app() {
   fi
 }
 
+# Exactly one, not merely a first match: checking one app and shipping another
+# beside it is the shape of hole this whole script exists to close.
+only_app() {
+  local root="$1" label="$2" apps
+  apps="$(find "$root" -maxdepth 1 -name '*.app')"
+  if [ "$(printf '%s\n' "$apps" | grep -c .)" != "1" ]; then
+    printf '  FAIL  %s does not hold exactly one .app:\n%s\n' "$label" "${apps:-  (none)}" >&2
+    exit 1
+  fi
+  printf '%s' "$apps"
+}
+
 printf 'Verifying %s\n' "$ZIP"
 /usr/bin/ditto -x -k "$ZIP" "$WORK/zip"
-ZIP_APP="$(find "$WORK/zip" -maxdepth 1 -name '*.app' -print -quit)"
-[ -n "$ZIP_APP" ] || { printf '  FAIL  no .app inside the zip\n' >&2; exit 1; }
+ZIP_APP="$(only_app "$WORK/zip" "the zip")"
 check_app "$ZIP_APP" "app from zip"
 
 printf 'Verifying %s\n' "$DMG"
@@ -84,8 +97,7 @@ fi
 
 mkdir -p "$MOUNT"
 /usr/bin/hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" -quiet
-DMG_APP="$(find "$MOUNT" -maxdepth 1 -name '*.app' -print -quit)"
-[ -n "$DMG_APP" ] || { printf '  FAIL  no .app inside the dmg\n' >&2; exit 1; }
+DMG_APP="$(only_app "$MOUNT" "the dmg")"
 check_app "$DMG_APP" "app in dmg"
 
 if [ "$FAILURES" -ne 0 ]; then
