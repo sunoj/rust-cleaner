@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds, signs, optionally notarizes, and publishes one Sparkle release of WD-40.
+# Builds, signs, notarizes and publishes one Sparkle release of WD-40.
 # Usage: ./scripts/release.sh <version> [release notes].
-# The upload secret comes from the login keychain, or from UPLOAD_SECRET if set.
+# Secrets live in the login keychain: the upload secret, Sparkle's signing key,
+# and notarytool's credentials. Nothing unnotarized can be published from here.
 
 set -euo pipefail
 
@@ -39,20 +40,44 @@ if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
   exit 1
 fi
 
-WD40_VERSION="$VERSION" WD40_BUILD="$BUILD" ./scripts/bundle.sh >/dev/null
-
-if [[ -n "${NOTARY_PROFILE:-}" && -n "${SIGN_IDENTITY:-}" ]]; then
-  /usr/bin/ditto -c -k --keepParent "$APP" "$OUT_DIR/notarize-$VERSION.zip"
-  printf 'Submitting to Apple notary (profile: %s)…\n' "$NOTARY_PROFILE"
-  xcrun notarytool submit "$OUT_DIR/notarize-$VERSION.zip" \
-    --keychain-profile "$NOTARY_PROFILE" --wait
-  xcrun stapler staple "$APP"
-  printf 'Notarized and stapled.\n'
-elif [[ -n "${SIGN_IDENTITY:-}" ]]; then
-  printf 'NOTE: Developer ID signed but not notarized; set NOTARY_PROFILE to notarize.\n'
-else
-  printf 'NOTE: Ad-hoc signed; Gatekeeper may warn on first launch.\n'
+# An ad-hoc build has no business on the relay: Gatekeeper rejects it, and the
+# only thing it can teach a person is to click through the warning. So the
+# identity is resolved before anything is built rather than defaulted away.
+NOTARY_PROFILE="${NOTARY_PROFILE:-wd40-notary}"
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+  IDENTITIES="$(security find-identity -v -p codesigning |
+    sed -n 's/^ *[0-9]*) *[0-9A-F]* "\(Developer ID Application:.*\)"$/\1/p')"
+  if [ "$(printf '%s\n' "$IDENTITIES" | grep -c .)" != "1" ]; then
+    printf 'ERROR: need exactly one Developer ID Application identity, found:\n' >&2
+    printf '%s\n' "${IDENTITIES:-  (none)}" >&2
+    printf 'Set SIGN_IDENTITY to choose one.\n' >&2
+    exit 1
+  fi
+  SIGN_IDENTITY="$IDENTITIES"
 fi
+printf 'Signing as %s\n' "$SIGN_IDENTITY"
+
+# Apple reads a zip of the app; the ticket goes onto the app itself, so both the
+# Sparkle zip and the disk image below are cut from an already-stapled copy.
+notarize() {
+  local submit="$1" staple="$2"
+  if ! xcrun notarytool submit "$submit" --keychain-profile "$NOTARY_PROFILE" --wait; then
+    printf 'ERROR: notarization failed for %s.\n' "$submit" >&2
+    printf 'If the profile is missing, store it once:\n' >&2
+    printf '  xcrun notarytool store-credentials %s \\\n' "$NOTARY_PROFILE" >&2
+    printf '    --apple-id <apple-id> --team-id <team-id> --password <app-specific-password>\n' >&2
+    exit 1
+  fi
+  xcrun stapler staple "$staple"
+}
+
+SIGN_IDENTITY="$SIGN_IDENTITY" WD40_VERSION="$VERSION" WD40_BUILD="$BUILD" \
+  ./scripts/bundle.sh >/dev/null
+
+printf 'Notarizing the app (profile: %s)…\n' "$NOTARY_PROFILE"
+/usr/bin/ditto -c -k --keepParent "$APP" "$OUT_DIR/notarize-$VERSION.zip"
+notarize "$OUT_DIR/notarize-$VERSION.zip" "$APP"
+rm -f "$OUT_DIR/notarize-$VERSION.zip"
 
 # Sparkle updates from the zip. People download the disk image: a zip lands in
 # ~/Downloads and gets run from there, and a quarantined app run in place is
@@ -68,6 +93,13 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "WD-40 $VERSION" -srcfolder "$STAGE" -ov -format UDZO \
   -quiet "$OUT_DIR/$DMG"
 rm -rf "$STAGE"
+
+# The disk image is the file people download, so Gatekeeper judges it on its own
+# signature before it ever looks at the app inside. Stapling it too means the
+# first open works on a machine that cannot reach Apple.
+codesign --force --sign "$SIGN_IDENTITY" --timestamp "$OUT_DIR/$DMG"
+printf 'Notarizing the disk image…\n'
+notarize "$OUT_DIR/$DMG" "$OUT_DIR/$DMG"
 
 SIG_LINE="$("$SIGN_UPDATE" "$OUT_DIR/$ZIP")"
 LENGTH="$(printf '%s' "$SIG_LINE" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
@@ -99,6 +131,11 @@ if ! xmllint --noout "$OUT_DIR/appcast.xml" 2>/dev/null; then
   printf 'ERROR: generated appcast.xml is not well-formed XML; nothing uploaded\n' >&2
   exit 1
 fi
+
+# The last gate, and the only one that reads the artifacts themselves rather
+# than the build directory they came from. 0.6.0 went out ad-hoc signed because
+# nothing here looked; the uploads are not transactional, so a bad one is live.
+./scripts/verify-release.sh "$OUT_DIR/$ZIP" "$OUT_DIR/$DMG"
 
 curl -fsS -X PUT "$RELAY/$ZIP" \
   -H "authorization: Bearer $UPLOAD_SECRET" \
