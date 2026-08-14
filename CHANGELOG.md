@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.4] — 2026-08-14
+
+### Changed
+- **The exact reclaimable figure is measured when someone means to clean, not on a timer** (`src/tasks.rs`, `src/actions.rs`): working out what targets really occupy on the device costs 6.5 seconds across 217,851 files, of which `open` alone is 16 seconds of aggregate work. It cannot be cached — two investigations in `docs/` say why — and no metadata rule can safely skip a file that might share a block, because an APFS clone that was partly rewritten still shares the blocks nobody touched. So it runs on the first tick instead of after every scan, which takes it off the automatic ten-minute rescan entirely. The Clean button still starts removing the instant it is pressed.
+- **A scan's total says "up to"** (`src/header.rs`): until that pass runs, the figure is a sum of allocated sizes, and on a disk full of `cp -Rc` clones that is a ceiling rather than an answer. The `≥` that means "still measuring" and the "up to" that means "settled, but a ceiling" never appear together.
+
+### Fixed
+- The legend row clipped "Free" off its right edge once the qualifier was added to it (`src/header.rs`). The qualifier now sits on the line below, where there is room, and the row has a test that fails if it overflows.
+
 ## [0.6.3] — 2026-08-14
 
 ### Fixed
