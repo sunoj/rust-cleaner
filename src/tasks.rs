@@ -76,8 +76,18 @@ pub fn is_discovering() -> bool {
     DISCOVERING.load(Ordering::Relaxed)
 }
 
+fn scan_screen_is_visible(screen: UiScreen) -> bool {
+    screen == UiScreen::Scan
+}
+
+fn discovery_sweep_should_run() -> bool {
+    DISCOVERING.load(Ordering::Relaxed)
+        && popover::is_open()
+        && with_state_ret(|state| scan_screen_is_visible(state.screen)).unwrap_or(false)
+}
+
 pub(crate) fn discovery_sweep_started() {
-    if !DISCOVERING.load(Ordering::Relaxed) || !popover::is_open() {
+    if !discovery_sweep_should_run() {
         stop_discovery_sweep();
         return;
     }
@@ -93,6 +103,7 @@ pub(crate) fn discovery_sweep_started() {
 
 pub(crate) fn discovery_sweep_stopped() {
     stop_discovery_sweep();
+    crate::motion::reset_scan_gauge();
 }
 
 fn stop_discovery_sweep() {
@@ -101,9 +112,7 @@ fn stop_discovery_sweep() {
 }
 
 pub fn on_discovery_sweep_tick(_mtm: MainThreadMarker) {
-    if !DISCOVERING.load(Ordering::Relaxed)
-        || !popover::is_open()
-    {
+    if !discovery_sweep_should_run() {
         stop_discovery_sweep();
         return;
     }
@@ -414,6 +423,7 @@ pub fn stop_auto_clean() {
 #[cfg(test)]
 mod tests {
     use super::settled_size;
+    use crate::state::UiScreen;
     use std::time::{Duration, SystemTime};
 
     #[test]
@@ -421,5 +431,11 @@ mod tests {
         let last_modified = Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(7));
         let queued = settled_size(wd40::sizes::SizedTarget { index: 3, bytes: 11, last_modified });
         assert_eq!(queued, (3, 11, last_modified));
+    }
+
+    #[test]
+    fn discovery_sweep_belongs_to_scan_screen() {
+        assert!(super::scan_screen_is_visible(UiScreen::Scan));
+        assert!(!super::scan_screen_is_visible(UiScreen::Settings));
     }
 }

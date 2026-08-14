@@ -180,3 +180,21 @@ fn grouped(duration: f64, body: impl FnOnce()) {
     body();
     NSAnimationContext::endGrouping();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{reset_scan_gauge, scan_gauge_animation};
+
+    #[test]
+    fn closing_scan_forgets_gauge_transition_before_settled_reopen() {
+        reset_scan_gauge();
+        let _ = scan_gauge_animation(4.0, true);
+        let _ = scan_gauge_animation(8.0, true);
+        crate::tasks::discovery_sweep_stopped();
+
+        let animation = scan_gauge_animation(16.0, false);
+        assert_eq!(animation.from, 16.0);
+        assert_eq!(animation.to, 16.0);
+        assert_eq!(animation.duration, 0.0);
+    }
+}
