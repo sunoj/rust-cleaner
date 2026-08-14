@@ -231,9 +231,9 @@ define_class!(
             tasks::on_sizes_done(self.mtm());
         }
 
-        #[unsafe(method(scanMotionTick:))]
-        fn scan_motion_tick(&self, _sender: *mut AnyObject) {
-            tasks::on_scan_motion_tick(self.mtm());
+        #[unsafe(method(discoverySweepTick:))]
+        fn discovery_sweep_tick(&self, _sender: *mut AnyObject) {
+            tasks::on_discovery_sweep_tick(self.mtm());
         }
 
         #[unsafe(method(cleanDone:))]

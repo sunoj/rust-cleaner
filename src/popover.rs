@@ -94,7 +94,7 @@ fn content_ready(mtm: MainThreadMarker) -> bool {
 }
 
 pub fn close() {
-    crate::tasks::scan_popover_closed();
+    crate::tasks::discovery_sweep_stopped();
     POPOVER.with(|cell| {
         if let Some(popover) = cell.borrow().as_ref() {
             popover.close();
@@ -203,7 +203,7 @@ fn ensure_popover(mtm: MainThreadMarker) {
 fn show(mtm: MainThreadMarker) {
     let opening = crate::auto_clean::prepare_popover_opening();
     show_permitted(mtm, opening);
-    crate::tasks::scan_popover_opened();
+    crate::tasks::discovery_sweep_started();
 }
 
 fn show_permitted(mtm: MainThreadMarker, _opening: crate::auto_clean::PopoverOpening) {

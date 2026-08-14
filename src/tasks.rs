@@ -35,7 +35,6 @@ const AUTO_SCAN_INTERVAL: f64 = 10.0 * 60.0;
 /// screen alone: removal starts the instant it is asked for, nothing waits on
 /// it, and every figure on the held screen is the finished one.
 const MIN_CLEAN_SCREEN: f64 = 2.0;
-const SCAN_MOTION_INTERVAL: f64 = 0.1;
 
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static SCANNING: AtomicBool = AtomicBool::new(false);
@@ -62,7 +61,7 @@ thread_local! {
     /// Runs out the rest of the cleaning screen's minimum time. It carries no
     /// work; the run is already over by the time it is scheduled.
     static HOLD_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
-    static SCAN_MOTION_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+    static DISCOVERY_SWEEP_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
 pub fn is_busy() -> bool {
@@ -77,35 +76,40 @@ pub fn is_discovering() -> bool {
     DISCOVERING.load(Ordering::Relaxed)
 }
 
-pub(crate) fn scan_popover_opened() {
-    if !SCANNING.load(Ordering::Relaxed)
-        || !popover::is_open()
-        || !crate::motion::scan_motion_allowed()
-    {
+pub(crate) fn discovery_sweep_started() {
+    if !DISCOVERING.load(Ordering::Relaxed) || !popover::is_open() {
+        stop_discovery_sweep();
         return;
     }
-    schedule(&SCAN_MOTION_TIMER, SCAN_MOTION_INTERVAL, sel!(scanMotionTick:), true);
-    crate::motion::scan_tick();
-}
-
-pub(crate) fn scan_popover_closed() {
-    stop_scan_motion();
-}
-
-fn stop_scan_motion() {
-    stop_timer(&SCAN_MOTION_TIMER);
-    crate::motion::stop_scan();
-}
-
-pub fn on_scan_motion_tick(_mtm: MainThreadMarker) {
-    if !SCANNING.load(Ordering::Relaxed)
-        || !popover::is_open()
-        || !crate::motion::scan_motion_allowed()
-    {
-        stop_scan_motion();
+    if !crate::motion::discovery_sweep_enabled() {
+        stop_discovery_sweep();
         return;
     }
-    crate::motion::scan_tick();
+    if DISCOVERY_SWEEP_TIMER.with(|cell| cell.borrow().is_some()) {
+        return;
+    }
+    schedule(&DISCOVERY_SWEEP_TIMER, crate::motion::DISCOVERY_SWEEP_INTERVAL, sel!(discoverySweepTick:), true);
+}
+
+pub(crate) fn discovery_sweep_stopped() {
+    stop_discovery_sweep();
+}
+
+fn stop_discovery_sweep() {
+    stop_timer(&DISCOVERY_SWEEP_TIMER);
+    crate::motion::stop_discovery_sweep();
+}
+
+pub fn on_discovery_sweep_tick(_mtm: MainThreadMarker) {
+    if !DISCOVERING.load(Ordering::Relaxed)
+        || !popover::is_open()
+    {
+        stop_discovery_sweep();
+        return;
+    }
+    if !crate::motion::advance_discovery_sweep() {
+        stop_discovery_sweep();
+    }
 }
 
 /// True once the user has asked the current run to stop starting new targets.
@@ -145,7 +149,7 @@ pub fn start_scan() {
         // catches the same state through popover::content_ready on reopen.
         if left_done || popover::is_open() {
             popover::refresh(mtm);
-            scan_popover_opened();
+            discovery_sweep_started();
         }
     }
     std::thread::spawn(move || {
@@ -156,12 +160,12 @@ pub fn start_scan() {
 
 pub fn on_scan_done(mtm: MainThreadMarker) {
     DISCOVERING.store(false, Ordering::Relaxed);
+    stop_discovery_sweep();
     // A new scan replaces the rows, so the remembered offset would point at
     // targets that are no longer there.
     crate::scrolling::reset_scroll();
     let Some(targets) = SCAN_RESULT.lock().unwrap().take() else {
         SCANNING.store(false, Ordering::Relaxed);
-        stop_scan_motion();
         popover::refresh(mtm);
         return;
     };
@@ -213,7 +217,6 @@ fn settled_size(sized: wd40::sizes::SizedTarget) -> SettledSize {
 
 pub fn on_sizes_done(mtm: MainThreadMarker) {
     SCANNING.store(false, Ordering::Relaxed);
-    stop_scan_motion();
     on_sizes_tick(mtm);
     // Only now is there a full set of figures to sort by, so this is the one
     // point at which rows are allowed to move.

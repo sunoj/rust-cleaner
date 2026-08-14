@@ -1,20 +1,21 @@
 // The popover's animation, and the single place Reduce Motion is honoured for
 // it: with that setting on every helper here lands on the final state at once,
 // so nothing is ever left mid-transition.
-// Exports: `arrive`, `glide`, `scan_indicator`, `scan_tick`, `stop_scan`.
+// Exports: `arrive`, `glide`, scan gauge and discovery sweep motion.
 // Deps: objc2 AppKit animator proxy, crate::metal::reduce_motion.
 
 use crate::metal::reduce_motion;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSAnimatablePropertyContainer, NSAnimationContext, NSControlSize, NSProgressIndicator,
-    NSProgressIndicatorStyle, NSView,
+    NSAnimatablePropertyContainer, NSAnimationContext, NSBox, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
-use std::cell::RefCell;
+use objc2_foundation::{NSPoint, NSRect, NSSize};
+use std::cell::{Cell, RefCell};
+use std::time::Instant;
 
 thread_local! {
-    static SCAN_INDICATOR: RefCell<Option<Retained<NSProgressIndicator>>> = const { RefCell::new(None) };
+    static SCAN_GAUGE: RefCell<Option<GaugeTransition>> = const { RefCell::new(None) };
+    static DISCOVERY_SWEEP: RefCell<Option<Sweep>> = const { RefCell::new(None) };
 }
 
 /// A figure appearing. Short enough that a burst of arriving sizes still reads
@@ -22,7 +23,28 @@ thread_local! {
 const ARRIVE: f64 = 0.22;
 /// Something moving or growing: a bar, a plate tile, a row.
 const GLIDE: f64 = 0.3;
-const SCAN_INDICATOR_SIZE: f64 = 16.0;
+const SWEEP_PERIOD: f64 = 1.8;
+const SWEEP_WIDTH: f64 = 38.0;
+pub const DISCOVERY_SWEEP_INTERVAL: f64 = 1.0 / 36.0;
+
+struct GaugeTransition {
+    from: f64,
+    to: f64,
+    started: Instant,
+}
+
+pub struct GaugeAnimation {
+    pub from: f64,
+    pub to: f64,
+    pub duration: f64,
+}
+
+struct Sweep {
+    view: Retained<NSBox>,
+    track_x: f64,
+    track_width: f64,
+    phase: Cell<f64>,
+}
 
 /// A value that has just become known: it fades up instead of blinking in.
 pub fn arrive(view: &NSView) {
@@ -36,55 +58,120 @@ pub fn arrive(view: &NSView) {
 
 /// Move or resize a view to `frame`.
 pub fn glide(view: &NSView, frame: NSRect) {
-    if reduce_motion() {
+    glide_for(view, frame, GLIDE);
+}
+
+fn glide_for(view: &NSView, frame: NSRect, duration: f64) {
+    if reduce_motion() || duration <= 0.0 {
         view.setFrame(frame);
         return;
     }
-    grouped(GLIDE, || view.animator().setFrame(frame));
+    grouped(duration, || view.animator().setFrame(frame));
 }
 
-/// Add the one native spinner used while the scan is discovering or sizing.
-pub fn scan_indicator(parent: &NSView, x: f64, y: f64, mtm: MainThreadMarker) {
-    stop_scan();
+pub fn glide_for_gauge(view: &NSBox, x: f64, y: f64, width: f64, duration: f64) {
+    glide_for(
+        view,
+        NSRect::new(NSPoint::new(x, y), NSSize::new(width.max(0.5), 11.0)),
+        duration,
+    );
+}
+
+pub fn glide_gauge_marker(view: &NSBox, x: f64, y: f64, duration: f64) {
+    glide_for(
+        view,
+        NSRect::new(NSPoint::new(x, y), NSSize::new(1.0, 11.0)),
+        duration,
+    );
+}
+
+/// Keep the gauge transition continuous when its header is rebuilt.
+pub fn scan_gauge_animation(target: f64, sizing: bool) -> GaugeAnimation {
+    let target = target.max(0.0);
     if reduce_motion() {
+        SCAN_GAUGE.with(|cell| {
+            *cell.borrow_mut() = Some(GaugeTransition { from: target, to: target, started: Instant::now() });
+        });
+        return GaugeAnimation { from: target, to: target, duration: 0.0 };
+    }
+
+    SCAN_GAUGE.with(|cell| {
+        let now = Instant::now();
+        let mut state = cell.borrow_mut();
+        let Some(previous) = state.as_mut() else {
+            *state = Some(GaugeTransition { from: target, to: target, started: now });
+            return GaugeAnimation { from: target, to: target, duration: 0.0 };
+        };
+        let current = gauge_width(previous, now);
+        let target = if sizing { target.max(previous.to).max(current) } else { target };
+        if target < current {
+            *previous = GaugeTransition { from: target, to: target, started: now };
+            return GaugeAnimation { from: target, to: target, duration: 0.0 };
+        }
+        let duration = if (target - previous.to).abs() < f64::EPSILON {
+            (GLIDE - previous.started.elapsed().as_secs_f64()).max(0.0)
+        } else {
+            *previous = GaugeTransition { from: current, to: target, started: now };
+            GLIDE
+        };
+        GaugeAnimation { from: current, to: target, duration }
+    })
+}
+
+pub fn reset_scan_gauge() {
+    SCAN_GAUGE.with(|cell| *cell.borrow_mut() = None);
+}
+
+pub fn discovery_sweep_enabled() -> bool {
+    !reduce_motion()
+}
+
+pub fn install_discovery_sweep(view: Retained<NSBox>, track_x: f64, track_width: f64) {
+    if reduce_motion() {
+        view.removeFromSuperview();
+        stop_discovery_sweep();
         return;
     }
-    let indicator = NSProgressIndicator::new(mtm);
-    indicator.setFrame(NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(SCAN_INDICATOR_SIZE, SCAN_INDICATOR_SIZE),
-    ));
-    indicator.setStyle(NSProgressIndicatorStyle::Spinning);
-    indicator.setControlSize(NSControlSize::Small);
-    indicator.setIndeterminate(true);
-    indicator.setDisplayedWhenStopped(false);
-    parent.addSubview(&indicator);
-    unsafe { indicator.startAnimation(None) };
-    SCAN_INDICATOR.with(|cell| *cell.borrow_mut() = Some(indicator));
+    let phase = DISCOVERY_SWEEP.with(|cell| cell.borrow().as_ref().map_or(0.0, |sweep| sweep.phase.get()));
+    let sweep = Sweep { view, track_x, track_width, phase: Cell::new(phase) };
+    set_sweep_frame(&sweep);
+    DISCOVERY_SWEEP.with(|cell| *cell.borrow_mut() = Some(sweep));
 }
 
-/// Keep the native indicator moving while sizing has no size tick to deliver.
-pub fn scan_tick() {
-    let indicator = SCAN_INDICATOR.with(|cell| cell.borrow().clone());
-    let Some(indicator) = indicator else { return };
+pub fn advance_discovery_sweep() -> bool {
     if reduce_motion() {
-        unsafe { indicator.stopAnimation(None) };
-    } else {
-        unsafe { indicator.startAnimation(None) };
+        stop_discovery_sweep();
+        return false;
     }
+    DISCOVERY_SWEEP.with(|cell| {
+        let state = cell.borrow();
+        let Some(sweep) = state.as_ref() else { return false };
+        sweep.phase.set((sweep.phase.get() + DISCOVERY_SWEEP_INTERVAL / SWEEP_PERIOD) % 1.0);
+        set_sweep_frame(sweep);
+        true
+    })
 }
 
-/// Stop and forget the scan indicator, including any in-flight native motion.
-pub fn stop_scan() {
-    SCAN_INDICATOR.with(|cell| {
-        if let Some(indicator) = cell.borrow_mut().take() {
-            unsafe { indicator.stopAnimation(None) };
+pub fn stop_discovery_sweep() {
+    DISCOVERY_SWEEP.with(|cell| {
+        if let Some(sweep) = cell.borrow_mut().take() {
+            sweep.view.removeFromSuperview();
         }
     });
 }
 
-pub fn scan_motion_allowed() -> bool {
-    !reduce_motion()
+fn gauge_width(transition: &GaugeTransition, now: Instant) -> f64 {
+    let progress = (now.duration_since(transition.started).as_secs_f64() / GLIDE).clamp(0.0, 1.0);
+    transition.from + (transition.to - transition.from) * progress
+}
+
+fn set_sweep_frame(sweep: &Sweep) {
+    let travel = sweep.track_width + SWEEP_WIDTH;
+    let x = sweep.track_x - SWEEP_WIDTH + travel * sweep.phase.get();
+    sweep.view.setFrame(NSRect::new(
+        NSPoint::new(x, sweep.view.frame().origin.y),
+        NSSize::new(SWEEP_WIDTH, sweep.view.frame().size.height),
+    ));
 }
 
 fn grouped(duration: f64, body: impl FnOnce()) {
