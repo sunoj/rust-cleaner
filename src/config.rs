@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Directory names recognized as cleanable dev artifacts.
-pub const ARTIFACT_DIRS: &[&str] = &["target", "node_modules", ".next", "dist", "build"];
+pub const ARTIFACT_DIRS: &[&str] = &["target", "node_modules", ".next", "dist", "build", ".build"];
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]

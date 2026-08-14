@@ -89,6 +89,8 @@ pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
     for path in [
         home.join("Library/Developer/Xcode/DerivedData"),
         home.join("Library/Developer/Xcode/ModuleCache.noindex"),
+        home.join("Library/Caches/org.swift.swiftpm"),
+        home.join("Library/Caches/com.apple.dt.Xcode"),
         home.join("Library/Caches/Homebrew"),
         // ~/.npm is npm's cache *root*, but it also holds _logs and npx state.
         // Only the content-addressable store is safe to drop wholesale.
@@ -107,6 +109,8 @@ pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
         }
     }
 
+    collect_xcode_device_support(found, &home.join("Library/Developer/Xcode"));
+
     // Cargo's downloads: the .crate tarballs, the sources unpacked from them and
     // the registry index. All of it comes back on the next build, so it goes in
     // whole rather than by part — but from CARGO_HOME, which can be moved.
@@ -120,6 +124,15 @@ pub(crate) fn collect_dev_caches(found: &mut Vec<TargetDir>) {
         let caches = device.join("data/Library/Caches");
         if caches.is_dir() && !caches.is_symlink() {
             push_dir(found, caches, ArtifactKind::Cache);
+        }
+    }
+}
+
+fn collect_xcode_device_support(found: &mut Vec<TargetDir>, xcode_root: &Path) {
+    for path in subdirs(xcode_root) {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+        if name.ends_with(" DeviceSupport") {
+            push_dir(found, path, ArtifactKind::Cache);
         }
     }
 }
@@ -147,7 +160,9 @@ fn modified(path: &Path) -> SystemTime {
 
 #[cfg(test)]
 mod tests {
-    use super::is_tmp_target_name;
+    use super::{collect_xcode_device_support, is_tmp_target_name};
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn tmp_target_names_cover_the_three_layouts() {
@@ -155,5 +170,24 @@ mod tests {
         assert!(is_tmp_target_name("smart-router-target"));
         assert!(is_tmp_target_name("filler-target-issue144"));
         assert!(!is_tmp_target_name("com.apple.launchd.abc"));
+    }
+
+    #[test]
+    fn all_xcode_device_support_siblings_are_collected() {
+        let root = std::env::temp_dir().join(format!("wd40-device-support-{}", std::process::id()));
+        let xcode = root.join("Xcode");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::create_dir_all(xcode.join("iOS DeviceSupport"));
+        let _ = fs::create_dir_all(xcode.join("watchOS DeviceSupport"));
+        let _ = fs::create_dir_all(xcode.join("Archives"));
+
+        let mut found = Vec::new();
+        collect_xcode_device_support(&mut found, &xcode);
+
+        let paths: Vec<PathBuf> = found.into_iter().map(|target| target.path).collect();
+        assert!(paths.contains(&xcode.join("iOS DeviceSupport")));
+        assert!(paths.contains(&xcode.join("watchOS DeviceSupport")));
+        assert!(!paths.contains(&xcode.join("Archives")));
+        let _ = fs::remove_dir_all(root);
     }
 }

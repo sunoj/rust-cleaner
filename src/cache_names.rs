@@ -11,6 +11,8 @@ use std::path::Path;
 const KNOWN: &[(&str, &str)] = &[
     ("Library/Developer/Xcode/DerivedData", "Xcode DerivedData"),
     ("Library/Developer/Xcode/ModuleCache.noindex", "Xcode module cache"),
+    ("Library/Caches/org.swift.swiftpm", "SwiftPM cache"),
+    ("Library/Caches/com.apple.dt.Xcode", "Xcode cache"),
     ("Library/Caches/Homebrew", "Homebrew downloads"),
     ("var/homebrew/cache", "Homebrew downloads"),
     (".local/share/pnpm/store", "pnpm store"),
@@ -33,11 +35,22 @@ pub fn cache_label(path: &Path) -> Option<String> {
     if let Some(label) = simulator_label(path) {
         return Some(label);
     }
+    if let Some(label) = xcode_device_support_label(path) {
+        return Some(label);
+    }
     let text = path.to_string_lossy();
     KNOWN
         .iter()
         .find(|(tail, _)| text.ends_with(tail))
         .map(|(_, label)| (*label).to_string())
+}
+
+fn xcode_device_support_label(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    if !name.ends_with(" DeviceSupport") || !path.parent()?.ends_with("Library/Developer/Xcode") {
+        return None;
+    }
+    Some(format!("Xcode {name}"))
 }
 
 /// The device directory this cache belongs to, if it is a simulator's.
@@ -102,6 +115,18 @@ mod tests {
         assert_eq!(
             cache_label(Path::new("/Users/x/.cargo/registry")).as_deref(),
             Some("Cargo registry")
+        );
+        assert_eq!(
+            cache_label(Path::new("/Users/x/Library/Caches/org.swift.swiftpm")).as_deref(),
+            Some("SwiftPM cache")
+        );
+        assert_eq!(
+            cache_label(Path::new("/Users/x/Library/Caches/com.apple.dt.Xcode")).as_deref(),
+            Some("Xcode cache")
+        );
+        assert_eq!(
+            cache_label(Path::new("/Users/x/Library/Developer/Xcode/iOS DeviceSupport")).as_deref(),
+            Some("Xcode iOS DeviceSupport")
         );
         assert_eq!(cache_label(Path::new("/Users/x/Develop/thing")), None);
     }
