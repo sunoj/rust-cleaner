@@ -22,17 +22,14 @@ const SKIP_DIRS: &[&str] = &[
     "Volumes",
 ];
 
-/// Directory names to match, once the groups the user switched off are taken
-/// out. A name the app does not know counts as build output, which is the same
-/// kind `walk` will give it if it is found.
+/// Built-in directory names to match, once the groups the user switched off
+/// are taken out.
 pub fn walk_types(config: &Config) -> Vec<&str> {
-    let mut types = Vec::new();
-    for name in ARTIFACT_DIRS.iter().copied().chain(config.artifact_types.iter().map(String::as_str)) {
-        if config.scans(ArtifactKind::for_dir_name(name).group()) && !types.contains(&name) {
-            types.push(name);
-        }
-    }
-    types
+    ARTIFACT_DIRS
+        .iter()
+        .copied()
+        .filter(|name| config.scans(ArtifactKind::for_dir_name(name).group()))
+        .collect()
 }
 
 /// Discover artifact directories. Sizes are all zero on return.
@@ -48,9 +45,8 @@ pub fn scan_discover(config: &Config) -> Vec<TargetDir> {
             .iter()
             .map(|dir| {
                 let types = &types;
-                let artifact_types = &config.artifact_types;
                 let max_depth = config.max_depth;
-                scope.spawn(move || walk(dir, types, artifact_types, max_depth))
+                scope.spawn(move || walk(dir, types, max_depth))
             })
             .collect();
         handles.into_iter().flat_map(|handle| handle.join().unwrap_or_default()).collect()
@@ -71,12 +67,12 @@ pub fn scan_discover(config: &Config) -> Vec<TargetDir> {
     found
 }
 
-fn walk(dir: &Path, types: &[&str], artifact_types: &[String], max_depth: usize) -> Vec<TargetDir> {
+fn walk(dir: &Path, types: &[&str], max_depth: usize) -> Vec<TargetDir> {
     let mut local = Vec::new();
     let walker = WalkDir::new(dir).max_depth(max_depth);
     for entry in walker
         .into_iter()
-        .filter_entry(|entry| !should_skip(entry, artifact_types))
+        .filter_entry(|entry| !should_skip(entry))
         .filter_map(Result::ok)
     {
         if entry.depth() == 0 || !entry.file_type().is_dir() {
@@ -97,7 +93,7 @@ fn walk(dir: &Path, types: &[&str], artifact_types: &[String], max_depth: usize)
     local
 }
 
-fn should_skip(entry: &DirEntry, artifact_types: &[String]) -> bool {
+fn should_skip(entry: &DirEntry) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return false;
     }
@@ -107,7 +103,7 @@ fn should_skip(entry: &DirEntry, artifact_types: &[String]) -> bool {
     }
     let name = entry.file_name().to_string_lossy();
     // Skip hidden dirs (except known artifact types like .next)
-    if name.starts_with('.') && !is_artifact_type(name.as_ref(), artifact_types) {
+    if name.starts_with('.') && !ARTIFACT_DIRS.iter().any(|artifact| *artifact == name) {
         return true;
     }
     // Skip non-dev directories (media, cloud, system)
@@ -120,12 +116,7 @@ fn should_skip(entry: &DirEntry, artifact_types: &[String]) -> bool {
         .parent()
         .and_then(Path::file_name)
         .and_then(|parent| parent.to_str())
-        .is_some_and(|parent| is_artifact_type(parent, artifact_types))
-}
-
-fn is_artifact_type(name: &str, extra_types: &[String]) -> bool {
-    ARTIFACT_DIRS.iter().any(|artifact| *artifact == name)
-        || extra_types.iter().any(|artifact| artifact == name)
+        .is_some_and(|parent| ARTIFACT_DIRS.iter().any(|artifact| *artifact == parent))
 }
 
 /// Validate that a directory is actually a dev artifact, not a false positive.
@@ -141,7 +132,8 @@ pub(crate) fn is_dev_artifact(path: &Path, name: &str) -> bool {
                 || path.join(".bin").is_dir()
         }
         ".next" => path.join("cache").is_dir() || path.join("static").is_dir(),
-        "dist" | "build" => path.parent().is_some_and(is_build_project),
+        "build" => path.parent().is_some_and(|parent| is_build_project(parent) || has_xcodeproj(parent)),
+        "dist" => path.parent().is_some_and(is_build_project),
         ".build" => path.parent().is_some_and(|parent| parent.join("Package.swift").is_file()),
         _ => false,
     }
@@ -152,8 +144,6 @@ fn is_build_project(parent: &Path) -> bool {
         || parent.join("Cargo.toml").is_file()
         || parent.join("build.gradle").is_file()
         || parent.join("platformio.ini").is_file()
-        || parent.join("Package.swift").is_file()
-        || has_xcodeproj(parent)
 }
 
 fn has_xcodeproj(parent: &Path) -> bool {
@@ -207,18 +197,9 @@ mod tests {
         assert!(types.contains(&"target"));
         assert!(types.contains(&"node_modules"));
         assert!(!types.contains(&"dist"));
+        assert!(!types.contains(&"build"));
+        assert!(!types.contains(&".build"));
         assert!(!types.contains(&".next"));
-    }
-
-    /// A name the app does not know is build output as far as the walk is
-    /// concerned, so the build output switch has to govern it too.
-    #[test]
-    fn a_custom_dir_name_follows_the_build_output_group() {
-        let mut config = Config::default();
-        config.artifact_types.push("vendor".to_string());
-        assert!(walk_types(&config).contains(&"vendor"));
-        config.set_scans(ArtifactGroup::BuildOutput, false);
-        assert!(!walk_types(&config).contains(&"vendor"));
     }
 
     #[test]
@@ -232,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn xcode_projects_mark_build_and_dist_as_artifacts() {
+    fn xcode_projects_mark_build_but_not_dist_as_artifacts() {
         let root = temp_dir("xcode-project-outputs");
         let _ = fs::create_dir_all(root.join("MyApp.xcodeproj"));
         let build = root.join("build");
@@ -241,12 +222,12 @@ mod tests {
         let _ = fs::create_dir_all(&dist);
 
         assert!(is_dev_artifact(&build, "build"));
-        assert!(is_dev_artifact(&dist, "dist"));
+        assert!(!is_dev_artifact(&dist, "dist"));
         cleanup(&root);
     }
 
     #[test]
-    fn swiftpm_projects_mark_build_and_dist_as_artifacts() {
+    fn swiftpm_projects_mark_neither_build_nor_dist_as_artifacts() {
         let root = temp_dir("swiftpm-project-outputs");
         let build = root.join("build");
         let dist = root.join("dist");
@@ -254,13 +235,13 @@ mod tests {
         let _ = fs::create_dir_all(&dist);
         let _ = fs::write(root.join("Package.swift"), "// swift-tools-version: 5.9\n");
 
-        assert!(is_dev_artifact(&build, "build"));
-        assert!(is_dev_artifact(&dist, "dist"));
+        assert!(!is_dev_artifact(&build, "build"));
+        assert!(!is_dev_artifact(&dist, "dist"));
         cleanup(&root);
     }
 
     #[test]
-    fn swiftpm_build_is_found_when_old_config_omits_build() {
+    fn swiftpm_build_is_found_as_a_builtin_output() {
         let root = temp_dir("swiftpm-build");
         let build = root.join(".build");
         let _ = fs::create_dir_all(&build);
@@ -268,9 +249,7 @@ mod tests {
 
         let mut config = Config::default();
         config.scan_dirs = vec![root.clone()];
-        config.artifact_types.retain(|name| name != ".build");
         config.scan_groups = vec![ArtifactGroup::BuildOutput.key().to_string()];
-        assert!(!config.artifact_types.iter().any(|name| name == ".build"));
         assert!(scan_discover(&config).iter().any(|target| target.path == build));
         cleanup(&root);
     }

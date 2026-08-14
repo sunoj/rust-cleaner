@@ -15,9 +15,6 @@ pub struct Config {
     pub max_age_days: u64,
     pub max_depth: usize,
     pub auto_clean_hours: u64,
-    /// Which artifact dir names the walk matches. Defaults to all known types;
-    /// a name outside `ARTIFACT_DIRS` counts as build output.
-    pub artifact_types: Vec<String>,
     /// Which artifact groups are looked for at all, by `ArtifactGroup::key`.
     /// A group that is not in here is never discovered, so it costs nothing to
     /// walk and shows no figure it did not measure.
@@ -33,7 +30,6 @@ impl Default for Config {
             max_age_days: 7,
             max_depth: 5,
             auto_clean_hours: 0,
-            artifact_types: ARTIFACT_DIRS.iter().map(|s| s.to_string()).collect(),
             scan_groups: ArtifactGroup::ALL.iter().map(|g| g.key().to_string()).collect(),
             menu_bar_size: true,
         }
@@ -125,7 +121,10 @@ mod tests {
     /// group on, rather than with an empty list that would find nothing.
     #[test]
     fn a_config_without_scan_groups_still_scans_everything() {
-        let config: Config = toml::from_str("max_age_days = 3\n").expect("parses");
+        let config: Config = toml::from_str(
+            "artifact_types = [\"target\", \"node_modules\", \"dist\", \"build\"]\nmax_age_days = 3\n",
+        )
+        .expect("parses");
         assert_eq!(config.max_age_days, 3);
         assert!(ArtifactGroup::ALL.iter().all(|group| config.scans(*group)));
         assert!(config.menu_bar_size);
